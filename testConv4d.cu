@@ -25,8 +25,8 @@ int main(int argc, char *argv[]){
     const int N=1, C=1, H=5, W=4; // src
     const int K=1, Hw=2, Ww=2; // flt*/
     int VERBOSE=0;
-    const int N=10, C=3, H=12, W=13; // src
-    const int K=5, Hw=4, Ww=3; // flt*/
+    const int N=28, C=3, H=12, W=13; // src
+    const int K=5, Hw=5, Ww=4; // flt*/
     assert(H>=Hw); assert(W>=Ww);
     const int Hy=H-Hw+1, Wy=W-Ww+1; // dst 
     double xData[N*C*H*W]; fillRandom(xData,N*C*H*W);
