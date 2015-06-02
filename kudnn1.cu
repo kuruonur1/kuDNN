@@ -79,14 +79,32 @@ __global__ void krnlBackBias4d( double *src, int N, int C, int H, int W,
     }
     dst[ind4d(C,H,W,1,j,1,1)] = sum;
 }
+
+__global__ void krnlXCorr4dDx( double *src, int N, int K, int Hy, int Wy,
+                            double *flt, int Hw, int Ww, int C,
+                            double *dst, int H, int W, int hpad, int wpad){
+    int h = threadIdx.x; 
+    int w = threadIdx.y; 
+    int i,j,k,l,m;
+    double sum=0;
+    int hsrc, wsrc;
+    for(i=0;i<N;i++){ for(j=0;j<C;j++){
+        sum=0;
+        for(k=0;k<K;k++){
+        for(l=0; l<Hw;l++){
+        for(m=0; m<Ww;m++){
+            hsrc = h+l-hpad; //int hsrc = h+Hf-1-l;
+            wsrc = w+m-wpad;
+            if(hsrc >= 0 && wsrc >= 0 && hsrc < Hy && wsrc < Wy) 
+                sum += src[ind4d(K,Hy,Wy,i,k,hsrc,wsrc)] * flt[ind4d(C,Hw,Ww,k,j,l,m)];
+        }}}
+        dst[ind4d(C,H,W,i,j,h,w)] = sum;
+    } }
+}
+
 __global__ void krnlXCorr4dDw( double *src, int N, int C, int H, int W,
                             double *flt, int Hy, int Wy, int K,
                             double *dst, int Hw, int Ww, int hpad, int wpad){
-    /* 
-        src: (W,H,C,N)          (N,C,H,W)
-        flt: (X,Y,C,K)          (K,C,Hf,Wf)
-        dst: (W-X+1,H-Y+1,K,N)  (N,K,H-Hf+1,W-Wf+1)
-    */
     int h = threadIdx.x; 
     int w = threadIdx.y; 
     int i,j,k,l,m;
@@ -160,6 +178,36 @@ __global__ void krnlXCorr4d( double *src, int N, int C, int H, int W,
     } }
 }
 
+__global__ void krnlConv4d( double *src, int N, int C, int H, int W,
+                            double *flt, int Hf, int Wf, int K,
+                            double *dst, int Ho, int Wo, int hpad, int wpad){
+    /* 
+        src: (W,H,C,N)          (N,C,H,W)
+        flt: (X,Y,C,K)          (K,C,Hf,Wf)
+        dst: (W-X+1,H-Y+1,K,N)  (N,K,H-Hf+1,W-Wf+1)
+    */
+    int h = threadIdx.x; 
+    int w = threadIdx.y; 
+    int i,j,k,l,m;
+    double sum=0;
+    int hsrc, wsrc;
+    for(i=0;i<N;i++){ for(k=0;k<K;k++){ 
+        sum=0;
+        for(j=0;j<C;j++){ 
+        for(l=Hf-1; l>=0;l--){
+        for(m=Wf-1; m>=0;m--){
+            //hsrc = h+l-hpad; //int hsrc = h+Hf-1-l;
+            //wsrc = w+m-wpad;
+            hsrc = h+Hf-1-l-hpad; //int hsrc = h+Hf-1-l;
+            wsrc = w+Wf-1-m-wpad;
+            if(hsrc >= 0 && wsrc >= 0 && hsrc < H && wsrc < W) 
+                sum += src[ind4d(C,H,W,i,j,hsrc,wsrc)] * flt[ind4d(C,Hf,Wf,k,j,l,m)];
+        }}}
+        dst[ind4d(K,Ho,Wo,i,k,h,w)] = sum;
+    } }
+}
+
+
 __global__ void krnlConv4dDx( double *src, int N, int K, int H, int W,
                             double *flt, int Hf, int Wf, int C,
                             double *dst, int Ho, int Wo, int hpad, int wpad){
@@ -231,9 +279,9 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionForward(        cudnnHandle_t         
     assert(dataType == CUDNN_DATA_DOUBLE);
     //printf("dst: N C H W %d %d %d %d\n", No, Co, Ho, Wo);
 
+
     dim3 threads(Ho, Wo, 1); 
     dim3 grid(1,1,1);
-
     if(mode == CUDNN_CROSS_CORRELATION){
         krnlXCorr4d<<<grid,threads>>>(    (double *)srcData, N, C, H, W,
                                             (double *)filterData, Hf, Wf, K,
@@ -243,12 +291,14 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionForward(        cudnnHandle_t         
 
     }else if(mode == CUDNN_CONVOLUTION){
         // conv(x,w)
-        /*krnlConv4d<<<grid,threads>>>(    (double *)srcData, N, C, H, W,
-                                            (double *)filterData, Hf, Wf, K,
-                                            (double *)destData, Ho, Wo, pad_h, pad_w);
+        //dim3 grid(N,K,1);
+        //dim3 threads(Ho, Wo, 1); 
+        krnlConv4d<<<grid,threads>>>((double *)srcData, N, C, H, W,
+                                    (double *)filterData, Hf, Wf, K,
+                                    (double *)destData, Ho, Wo, pad_h, pad_w);
         gpuErrchk( cudaPeekAtLastError() );
-        gpuErrchk( cudaDeviceSynchronize() );*/
-        status = CUDNN_STATUS_NOT_SUPPORTED;
+        gpuErrchk( cudaDeviceSynchronize() );
+        //status = CUDNN_STATUS_NOT_SUPPORTED;
     }else{
         status = CUDNN_STATUS_BAD_PARAM;
     }
@@ -362,12 +412,12 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionBackwardData(  cudnnHandle_t          
 
     }else if(mode == CUDNN_CONVOLUTION){
         // xcorr(dy,w,'full')
-        /*krnlXCorr4d<<<grid,threads>>>(    (double *)diffData, N, K, Hy, Wy,
+        krnlXCorr4dDx<<<grid,threads>>>(    (double *)diffData, N, K, Hy, Wy,
                                             (double *)filterData, Hw, Ww, C,
-                                            (double *)gradData, H, W, Hy-1, Wy-1);
+                                            (double *)gradData, H, W, Hw-1, Ww-1);
         gpuErrchk( cudaPeekAtLastError() );
-        gpuErrchk( cudaDeviceSynchronize() );*/
-        status = CUDNN_STATUS_NOT_SUPPORTED;
+        gpuErrchk( cudaDeviceSynchronize() );
+        //status = CUDNN_STATUS_NOT_SUPPORTED;
     }else{
         status = CUDNN_STATUS_BAD_PARAM;
     }

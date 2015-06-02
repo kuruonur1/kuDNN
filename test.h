@@ -1,4 +1,14 @@
 
+inline void print2Dd(double *E, int h, int w){
+    int i,j;
+    for(i=0;i<h;i++){
+        for(j=0;j<w;j++){
+            printf("%.4f\t", E[i*w+j]);
+        }
+        printf("\n");
+    }
+}
+
 void  readImages(double *E, int N){
     FILE *fp;
     fp=fopen("data0", "rb");

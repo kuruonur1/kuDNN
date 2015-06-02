@@ -25,15 +25,6 @@ inline void cudnnAssert(cudnnStatus_t code, const char *file, int line, bool abo
 #define ind4d(c,h,w,i,j,k,l) ((i)*(c)*(h)*(w)+(j)*(h)*(w)+(k)*(w)+l)
 #define ind5d(c,h,w,d,i,j,k,l,m) ((i)*(c)*(h)*(w)*(d)+(j)*(h)*(w)*(d)+(k)*(w)*(d)+(l)*(d)+m)
 
-inline void print2Dd(double *E, int h, int w){
-    int i,j;
-    for(i=0;i<h;i++){
-        for(j=0;j<w;j++){
-            printf("%.4f\t", E[i*w+j]);
-        }
-        printf("\n");
-    }
-}
 
 cudnnStatus_t CUDNNWINAPI kunetConvolutionForward(        cudnnHandle_t                     handle,
                                                           const void                         *alpha,

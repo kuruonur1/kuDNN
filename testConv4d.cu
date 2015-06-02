@@ -4,51 +4,29 @@
 #include <math.h>
 #include "kudnn.h"
 #include <time.h>
+#include "test.h"
+#include <string.h>
 
-void  readImages(double *E, int N){
-    FILE *fp;
-    fp=fopen("data0", "rb");
-    //size_t fread(void *ptr, size_t size_of_elements, size_t number_of_elements, FILE *a_file);
-    unsigned char images[N];
-    //double *E = (double*)malloc(sizeof(double)*N);
-    fread(images, sizeof(unsigned char), N, fp);
-    int i;
-    for(i=0;i<N;i++)
-        E[i] = images[i]/255.0;
-    fclose(fp);
-}
-
-void fillRandom(double *E, int N){
-    int i;
-    for(i=0; i<N; i++)
-        E[i] = rand() % 10 + 1;
-}
-
-double eqseq(double *A, double *B, int N){
-    int i;
-    double err=0;
-    for(i=0;i<N;i++)
-        err += abs(A[i]-B[i]);
-    return err;
-}
-
-double xtoyData[] = 
-{   1.0, 6.0, 11.0, 16.0,
-    2.0, 7.0, 12.0, 17.0,
-    3.0, 8.0, 13.0, 18.0,
-    4.0, 9.0, 14.0, 19.0,
-    5.0, 10.0, 15.0, 20.0,
-    4.0, 9.0, 14.0, 19.0 };
-double wtoyData[] = 
-{   1.0, 3.0, 1.0, 3.0,
-    2.0, 4.0, 2.0, 4.0};
-
-int main(){
-    int VERBOSE=0;
-    int CONV=1;
+int main(int argc, char *argv[]){
+    int CONV;
+    if(argc==2){
+        if(!strcmp(argv[1], "conv"))
+            CONV=1;
+        else if(!strcmp(argv[1],"xcorr"))
+            CONV=0;
+        else
+            exit(-1);
+    }else{
+        printf("usage: ./testConv4d <mode>\n");
+        exit(-1);
+    }
     srand(time(NULL));
-    const int N=100, C=3, H=28, W=28; // src
-    const int K=10, Hw=7, Ww=7; // flt
+    /*int VERBOSE=1;
+    const int N=1, C=1, H=5, W=4; // src
+    const int K=1, Hw=2, Ww=2; // flt*/
+    int VERBOSE=0;
+    const int N=10, C=3, H=12, W=13; // src
+    const int K=5, Hw=4, Ww=3; // flt*/
     assert(H>=Hw); assert(W>=Ww);
     const int Hy=H-Hw+1, Wy=W-Ww+1; // dst 
     double xData[N*C*H*W]; fillRandom(xData,N*C*H*W);

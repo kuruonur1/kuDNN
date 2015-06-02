@@ -9,10 +9,10 @@
 
 int main(){
     int VERBOSE=0;
-    int PMODE=1; // max
+    //int PMODE=1; // max
     srand(time(NULL));
-    const int N=5, C=3, H=10, W=10; // src
-    const int K=C, Hd=3, Wd=3; // window
+    const int N=128, C=11, H=23, W=22; // src
+    const int K=C, Hd=6, Wd=5; // window
     const int Hs=Hd, Ws=Hd; // stride
     const int Hp=0, Wp=0; // padding
     assert(H>=Hd); assert(W>=Wd);
