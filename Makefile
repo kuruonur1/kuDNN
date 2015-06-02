@@ -224,10 +224,10 @@ bandwidthTest.o: bandwidthTest.cu
 bandwidthTest.bin: bandwidthTest.o
 	$(EXEC) $(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -o $@ $+ $(LIBRARIES)
 
-test4d.o: test4d.cu
+test%4d.o: test%4d.cu
 	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
 
-test4d: test4d.o kudnn1.o
+test%4d: test%4d.o kudnn1.o
 	$(EXEC) $(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -o $@ $+ $(LIBRARIES)
 
 kudnn%.o: kudnn%.cu

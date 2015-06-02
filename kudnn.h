@@ -80,16 +80,6 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionBackwardBias(   cudnnHandle_t         
                                                           void                           *destData
                                                       );
 
-cudnnStatus_t CUDNNWINAPI cudnnPoolingForward(  cudnnHandle_t handle,
-                                                const cudnnPoolingDescriptor_t   poolingDesc,
-                                                const void                      *alpha,
-                                                const cudnnTensorDescriptor_t    srcDesc,
-                                                const void                      *srcData,
-                                                const void                      *beta,
-                                                const cudnnTensorDescriptor_t    destDesc,
-                                                void                            *destData
-                                             );
-
 cudnnStatus_t CUDNNWINAPI kunetPoolingForward(  cudnnHandle_t handle,
                                                 const cudnnPoolingDescriptor_t   poolingDesc,
                                                 const void                      *alpha,
@@ -99,3 +89,17 @@ cudnnStatus_t CUDNNWINAPI kunetPoolingForward(  cudnnHandle_t handle,
                                                 const cudnnTensorDescriptor_t    destDesc,
                                                 void                            *destData
                                              );
+
+cudnnStatus_t CUDNNWINAPI kunetPoolingBackward( cudnnHandle_t                   handle,
+                                                const cudnnPoolingDescriptor_t  poolingDesc,
+                                                const void                      *alpha,
+                                                const cudnnTensorDescriptor_t   srcDesc,
+                                                const void                     *srcData,
+                                                const cudnnTensorDescriptor_t   srcDiffDesc,
+                                                const void                     *srcDiffData,
+                                                const cudnnTensorDescriptor_t   destDesc,
+                                                const void                     *destData,
+                                                const void                     *beta,
+                                                const cudnnTensorDescriptor_t   destDiffDesc,
+                                                void                           *destDiffData
+                                              );

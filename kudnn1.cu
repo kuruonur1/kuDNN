@@ -11,26 +11,60 @@
   cudnnPoolingForward(pd::PoolingDescriptor, src::Tensor, dest::Tensor) Performs the pooling operation specified by pd on src, writes the result to dest and returns dest. The C and N dimensions of src and dest should match. If a src dimension (other than C,N) is x, and the corresponding pooling area dimension is d, padding is p, stride is s, then the corresponding dest dimension should be y=1+ceil((x+2p-d)/s).**/
 
 __global__ void krnlMaxPool4d( double *src, int N, int C, int H, int W,
-                            int Hp, int Wp,
-                            double *dst, int Ho, int Wo, int hStride, int wStride){
-    int h = threadIdx.x * hStride; // stride
-    int w = threadIdx.y * wStride; // stride
-    int i,j,l,m;
+                            int Hd, int Wd, int Hs, int Ws,
+                            double *dst, int Hy, int Wy){
+    int i = blockIdx.x; int j = blockIdx.y;
+    int hy = threadIdx.x; int wy = threadIdx.y;
+    int hx = hy*Hs; int wx = wy*Ws;
+    int l,m;
     int hsrc, wsrc;
     double maxm;
-    for(i=0;i<N;i++){ for(j=0;j<C;j++){
-        maxm=src[ind4d(C,H,W,i,j,h,w)];
-        //maxm=INT_MIN;
-        for(l=0; l<Hp;l++){
-        for(m=0; m<Wp;m++){
-            hsrc = h+l; wsrc = w+m;
-            if(hsrc >= 0 && wsrc >= 0 && hsrc < H && wsrc < W) 
-                if(src[ind4d(C,H,W,i,j,hsrc,wsrc)] > maxm)
-                    maxm = src[ind4d(C,H,W,i,j,hsrc,wsrc)];
-        }}
-        dst[ind4d(C,Ho,Wo,i,j,h,w)] = maxm; 
+    maxm=src[ind4d(C,H,W,i,j,hx,wx)]; // might cause a problem when pad != 0!!!
+    //maxm=INT_MIN;
+    for(l=0; l<Hd;l++){ for(m=0; m<Wd;m++){
+        hsrc = hx+l; wsrc = wx+m;
+        if(hsrc >= 0 && wsrc >= 0 && hsrc < H && wsrc < W) 
+            if(src[ind4d(C,H,W,i,j,hsrc,wsrc)] > maxm)
+                maxm = src[ind4d(C,H,W,i,j,hsrc,wsrc)];
+    }}
+    dst[ind4d(C,Hy,Wy,i,j,hy,wy)] = maxm; 
+}
+
+__global__ void krnlMaxPool4dDx( double *y, int N, int C, int Hy, int Wy,
+                                double *dy,
+                                double *x,  int H, int W,
+                                double *dx,
+                            int Hd, int Wd, int Hs, int Ws){
+    // could be a simpler algo if there was only one max value at x.
+    int i = blockIdx.x; int j = blockIdx.y;
+    int hy = threadIdx.x; int wy = threadIdx.y;
+    int hx = hy*Hs; int wx = wy*Ws;
+    int l,m;
+    int hsrc, wsrc;
+    double maxm, maxmhx, maxmwx;
+    maxm = x[ind4d(C,H,W,i,j,hx,wx)]; // might cause a problem when pad != 0!!!
+    maxmhx = hx; maxmwx = wx;
+    //maxm=INT_MIN;
+    for(l=0; l<Hd;l++){ for(m=0; m<Wd;m++){
+        hsrc = hx+l; wsrc = wx+m;
+        if(hsrc >= 0 && wsrc >= 0 && hsrc < H && wsrc < W){
+            if(x[ind4d(C,H,W,i,j,hsrc,wsrc)] > maxm){
+                maxm = x[ind4d(C,H,W,i,j,hsrc,wsrc)];
+                maxmhx = hsrc; maxmwx = wsrc;
+            }
+        }
+    }}
+    for(l=0; l<Hd;l++){ for(m=0; m<Wd;m++){
+        hsrc = hx+l; wsrc = wx+m;
+        if(hsrc >= 0 && wsrc >= 0 && hsrc < H && wsrc < W){
+            if(hsrc == maxmhx && wsrc == maxmwx)
+                dx[ind4d(C,H,W,i,j,hsrc,wsrc)]=dy[ind4d(C,Hy,Wy,i,j,hsrc/Hs,wsrc/Ws)];
+            else
+                dx[ind4d(C,H,W,i,j,hsrc,wsrc)]=0;
+        }
     }}
 }
+
 
 __global__ void krnlBackBias4d( double *src, int N, int C, int H, int W,
                             double *dst){
@@ -208,11 +242,13 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionForward(        cudnnHandle_t         
         gpuErrchk( cudaDeviceSynchronize() );
 
     }else if(mode == CUDNN_CONVOLUTION){
+        // conv(x,w)
         /*krnlConv4d<<<grid,threads>>>(    (double *)srcData, N, C, H, W,
                                             (double *)filterData, Hf, Wf, K,
                                             (double *)destData, Ho, Wo, pad_h, pad_w);
         gpuErrchk( cudaPeekAtLastError() );
         gpuErrchk( cudaDeviceSynchronize() );*/
+        status = CUDNN_STATUS_NOT_SUPPORTED;
     }else{
         status = CUDNN_STATUS_BAD_PARAM;
     }
@@ -331,6 +367,7 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionBackwardData(  cudnnHandle_t          
                                             (double *)gradData, H, W, Hy-1, Wy-1);
         gpuErrchk( cudaPeekAtLastError() );
         gpuErrchk( cudaDeviceSynchronize() );*/
+        status = CUDNN_STATUS_NOT_SUPPORTED;
     }else{
         status = CUDNN_STATUS_BAD_PARAM;
     }
@@ -375,28 +412,83 @@ cudnnStatus_t CUDNNWINAPI kunetPoolingForward(  cudnnHandle_t handle,
     cudnnStatus_t status = CUDNN_STATUS_SUCCESS;
     cudnnDataType_t dataType; // image data type
     cudnnPoolingMode_t mode;
-    int N,K,Hy,Wy;
+
     int strides[4];
+
+    int N,C,H,W;
+    cudnnGetTensor4dDescriptor(srcDesc, &dataType, &N, &C, &H, &W,
+                            strides, strides+1, strides+2, strides+3);
+
+    int Hd, Wd, Hp, Wp, Hs, Ws;
+    cudnnGetPooling2dDescriptor(poolingDesc, &mode, &Hd, &Wd, &Hp, &Wp, &Hs, &Ws);
+    assert(Hp==0); assert(Wp==0);
+
+    int No,K,Hy,Wy;
+    cudnnGetTensor4dDescriptor(destDesc, &dataType, &No, &K, &Hy, &Wy,
+                            strides, strides+1, strides+2, strides+3);
+    assert(N==No); assert(C==K);
+
+    printf("N:%d C:%d H:%d W:%d\n",N,C,H,W);
+    printf("Hd:%d Wd:%d Hs:%d Ws:%d Hp:%d Wp:%d\n",Hd,Wd,Hs,Ws,Hp,Wp);
+    printf("N:%d K:%d Hy:%d Wy:%d\n",N,C,Hy,Wy);
+
+    dim3 grid(N,K,1);
+    dim3 threads(Hy, Wy, 1); 
+    if(mode == CUDNN_POOLING_MAX){
+        krnlMaxPool4d<<<grid,threads>>>((double *)srcData, N, C, H, W,
+                            Hd, Wd, Hs, Ws,
+                            (double *)destData, Hy, Wy);
+        gpuErrchk( cudaPeekAtLastError() );
+        gpuErrchk( cudaDeviceSynchronize() );
+    }else{
+        status = CUDNN_STATUS_NOT_SUPPORTED;
+    }
+    return status;
+}
+
+cudnnStatus_t CUDNNWINAPI kunetPoolingBackward( cudnnHandle_t                   handle,
+                                                const cudnnPoolingDescriptor_t  poolingDesc,
+                                                const void                      *alpha,
+                                                const cudnnTensorDescriptor_t   srcDesc,
+                                                const void                     *srcData,
+                                                const cudnnTensorDescriptor_t   srcDiffDesc,
+                                                const void                     *srcDiffData,
+                                                const cudnnTensorDescriptor_t   destDesc,
+                                                const void                     *destData,
+                                                const void                     *beta,
+                                                const cudnnTensorDescriptor_t   destDiffDesc,
+                                                void                           *destDiffData
+                                              ){
+    cudnnStatus_t status = CUDNN_STATUS_SUCCESS;
+    cudnnDataType_t dataType; // image data type
+    cudnnPoolingMode_t mode;
+    int strides[4];
+
+    int Hd, Wd, Hp, Wp, Hs, Ws;
+    cudnnGetPooling2dDescriptor(poolingDesc, &mode, &Hd, &Wd, &Hp, &Wp, &Hs, &Ws);
+    assert(Hp==0); assert(Wp==0);
+
+    int N,K,Hy,Wy;
     cudnnGetTensor4dDescriptor(srcDesc, &dataType, &N, &K, &Hy, &Wy,
                             strides, strides+1, strides+2, strides+3);
-
-    int Hp, Wp, hPad, wPad, hStride, wStride;
-    cudnnGetPooling2dDescriptor(poolingDesc, &mode, &Hp, &Wp, &hPad, &wPad, &hStride, &wStride);
-    printf("Hp:%d Wp:%d hStride:%d wStride:%d\n", Hp, Wp, hStride, wStride);
-
-    int No,Ko,Hyp,Wyp;
-    cudnnGetTensor4dDescriptor(destDesc, &dataType, &No, &Ko, &Hyp, &Wyp,
+    int Ndy,Kdy,Hdy,Wdy;
+    cudnnGetTensor4dDescriptor(srcDiffDesc, &dataType, &Ndy, &Kdy, &Hdy, &Wdy,
                             strides, strides+1, strides+2, strides+3);
-    assert(N==No); assert(K==Ko);
-    printf("Hy:%d Wy:%d\n", Hy, Wy);
-    printf("Hyp:%d Wyp:%d\n", Hyp, Wyp);
 
-    dim3 threads(Hyp, Wyp, 1); 
-    dim3 grid(1,1,1);
+    int Nx,C,H,W;
+    cudnnGetTensor4dDescriptor(destDesc, &dataType, &Nx, &C, &H, &W,
+                            strides, strides+1, strides+2, strides+3);
+    int Ndx,Cdx,Hdx,Wdx;
+    cudnnGetTensor4dDescriptor(destDiffDesc, &dataType, &Ndx, &Cdx, &Hdx, &Wdx,
+                            strides, strides+1, strides+2, strides+3);
+    dim3 grid(N,K,1);
+    dim3 threads(Hy, Wy, 1); 
     if(mode == CUDNN_POOLING_MAX){
-        krnlMaxPool4d<<<grid,threads>>>((double *)srcData, N, K, Hy, Wy,
-                Hp, Wp,
-                (double *)destData, Hyp, Wyp, hStride, wStride);
+    krnlMaxPool4dDx<<<grid,threads>>>((double *)srcData, N, C, Hy, Wy,
+                                (double *)srcDiffData,
+                                (double *)destData, H, W,
+                                (double *)destDiffData,
+                                    Hd, Wd, Hs, Ws);
         gpuErrchk( cudaPeekAtLastError() );
         gpuErrchk( cudaDeviceSynchronize() );
     }else{
