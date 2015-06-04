@@ -7,9 +7,6 @@
 
 
 
-/**
-  cudnnPoolingForward(pd::PoolingDescriptor, src::Tensor, dest::Tensor) Performs the pooling operation specified by pd on src, writes the result to dest and returns dest. The C and N dimensions of src and dest should match. If a src dimension (other than C,N) is x, and the corresponding pooling area dimension is d, padding is p, stride is s, then the corresponding dest dimension should be y=1+ceil((x+2p-d)/s).**/
-
 __global__ void krnlMaxPool4d( double *src, int N, int C, int H, int W,
                             int Hd, int Wd, int Hs, int Ws,
                             double *dst, int Hy, int Wy){
@@ -83,6 +80,7 @@ __global__ void krnlBackBias4d( double *src, int N, int C, int H, int W,
 __global__ void krnlXCorr4dDx( double *src, int N, int K, int Hy, int Wy,
                             double *flt, int Hw, int Ww, int C,
                             double *dst, int H, int W, int hpad, int wpad){
+    // mode:conv dx=xcorr(dy,w,'full')
     int i = blockIdx.x; int j = blockIdx.y; 
     int h = threadIdx.x; int w = threadIdx.y; 
     int k,l,m;
@@ -102,6 +100,7 @@ __global__ void krnlXCorr4dDx( double *src, int N, int K, int Hy, int Wy,
 __global__ void krnlXCorr4dDw( double *src, int N, int C, int H, int W,
                             double *flt, int Hy, int Wy, int K,
                             double *dst, int Hw, int Ww, int hpad, int wpad){
+    // mode:xcorr dw=xcorr(x,dy)
     int k = blockIdx.x; int j = blockIdx.y; 
     int h = threadIdx.x; int w = threadIdx.y; 
     int i,l,m;
@@ -121,6 +120,7 @@ __global__ void krnlXCorr4dDw( double *src, int N, int C, int H, int W,
 __global__ void krnlXCorr4dDwRot180( double *src, int N, int C, int H, int W,
                             double *flt, int Hy, int Wy, int K,
                             double *dst, int Hw, int Ww, int hpad, int wpad){
+    // mode:conv dw=rot180(xcorr(x,dy))
     int k = blockIdx.x; int j = blockIdx.y; 
     int h = threadIdx.x; int w = threadIdx.y; 
     int i,l,m;
@@ -137,16 +137,42 @@ __global__ void krnlXCorr4dDwRot180( double *src, int N, int C, int H, int W,
     dst[ind4d(C,Hw,Ww,k,j,Hw-h-1,Ww-w-1)] = sum;
 }
 
-__global__ void krnlXCorr4d( double *src, int N, int C, int H, int W,
+__global__ void krnlXCorr4d(    double *src, int N, int C, int H, int W,
+                                double *flt, int K, int Cw, int Hw, int Ww, 
+                                double *dst, int Ny, int Ky, int Hy, int Wy,
+                                int NySt, int KySt, int HySt, int WySt,
+                                int hpad, int wpad, const int lim){
+    // mode:xcorr y=xcorr(x,w) // all the other krnls will be rewritten like this.
+    // output N K Hy Wy
+    int i,k,h,w, j,l,m, g,cumul, hsrc, wsrc;
+    g = threadIdx.x + blockIdx.x * blockDim.x;
+    while(g < lim){
+        cumul=g;
+        i=cumul/NySt; cumul -= i*NySt;
+        k=cumul/KySt; cumul -= k*KySt;
+        h=cumul/HySt; cumul -= h*HySt;
+        w=cumul/WySt;
+
+        double sum=0;
+        for(j=0;j<C;j++){ 
+        for(l=0; l<Hw;l++){
+        for(m=0; m<Ww;m++){
+            hsrc = h+l-hpad; //int hsrc = h+Hf-1-l;
+            wsrc = w+m-wpad;
+            if(hsrc >= 0 && wsrc >= 0 && hsrc < H && wsrc < W) 
+                sum += src[ind4d(C,H,W,i,j,hsrc,wsrc)] * flt[ind4d(C,Hw,Ww,k,j,l,m)];
+        }}}
+        dst[g] = sum; // dst[ind4d(K,Hy,Wy,i,k,h,w)] = sum;
+
+        g += blockDim.x * gridDim.x;
+    }
+}
+
+/*__global__ void krnlXCorr4d2( double *src, int N, int C, int H, int W,
                             double *flt, int Hf, int Wf, int K,
                             double *dst, int Ho, int Wo, int hpad, int wpad){
-    /* 
-        src: (W,H,C,N)          (N,C,H,W)
-        flt: (X,Y,C,K)          (K,C,Hf,Wf)
-        dst: (W-X+1,H-Y+1,K,N)  (N,K,H-Hf+1,W-Wf+1)
-    */
-    int i = blockIdx.x; int k = blockIdx.y; 
-    int h = threadIdx.x; int w = threadIdx.y; 
+    //int i = blockIdx.x; int k = blockIdx.y; int h = threadIdx.x; int w = threadIdx.y; 
+    int h = blockIdx.x; int w = blockIdx.y; int i = threadIdx.x; int k = threadIdx.y; 
     int j,l,m;
     double sum=0;
     int hsrc, wsrc;
@@ -160,17 +186,19 @@ __global__ void krnlXCorr4d( double *src, int N, int C, int H, int W,
             sum += src[ind4d(C,H,W,i,j,hsrc,wsrc)] * flt[ind4d(C,Hf,Wf,k,j,l,m)];
     }}}
     dst[ind4d(K,Ho,Wo,i,k,h,w)] = sum;
-}
+}*/
 
 __global__ void krnlConv4d( double *src, int N, int C, int H, int W,
                             double *flt, int Hf, int Wf, int K,
                             double *dst, int Ho, int Wo, int hpad, int wpad){
-    int i = blockIdx.x; int k = blockIdx.y; 
-    int h = threadIdx.x; int w = threadIdx.y; 
+    // mode:conv y=conv(x,w)
+    /*int i = threadIdx.x; int k = blockIdx.y; 
+    int h = blockIdx.x; int w = threadIdx.y; */
+    int h = blockIdx.x; int w = blockIdx.y; int i = threadIdx.x; int k = threadIdx.y; 
     int j,l,m;
-    double sum=0;
     int hsrc, wsrc;
-    sum=0;
+
+    double sum=0;
     for(j=0;j<C;j++){ 
     for(l=Hf-1; l>=0;l--){
     for(m=Wf-1; m>=0;m--){
@@ -179,13 +207,14 @@ __global__ void krnlConv4d( double *src, int N, int C, int H, int W,
         if(hsrc >= 0 && wsrc >= 0 && hsrc < H && wsrc < W) 
             sum += src[ind4d(C,H,W,i,j,hsrc,wsrc)] * flt[ind4d(C,Hf,Wf,k,j,l,m)];
     }}}
-        dst[ind4d(K,Ho,Wo,i,k,h,w)] = sum;
+    dst[ind4d(K,Ho,Wo,i,k,h,w)] = sum;
 }
 
 
 __global__ void krnlConv4dDx( double *src, int N, int K, int H, int W,
                             double *flt, int Hf, int Wf, int C,
                             double *dst, int Ho, int Wo, int hpad, int wpad){
+    // mode:xcorr dx=conv(dy,w,'full')
     int i = blockIdx.x; int j = blockIdx.y; 
     int h = threadIdx.x; int w = threadIdx.y; 
     int k,l,m;
@@ -202,19 +231,21 @@ __global__ void krnlConv4dDx( double *src, int N, int K, int H, int W,
     dst[ind4d(C,Ho,Wo,i,j,h,w)] = sum;
 }
 
+// CUDNN LIKE API
+
 cudnnStatus_t CUDNNWINAPI kunetConvolutionForward(        cudnnHandle_t                     handle,
                                                           const void                         *alpha,
                                                           const cudnnTensorDescriptor_t       srcDesc,
-                                                          const void                         *srcData,
+                                                          const void                         *src,
                                                           const cudnnFilterDescriptor_t       filterDesc,
-                                                          const void                         *filterData,
+                                                          const void                         *flt,
                                                           const cudnnConvolutionDescriptor_t  convDesc,
                                                           cudnnConvolutionFwdAlgo_t           algo,
                                                           void                               *workSpace,
                                                           size_t                              workSpaceSizeInBytes,            
                                                           const void                         *beta,
                                                           const cudnnTensorDescriptor_t       destDesc,
-                                                          void                               *destData
+                                                          void                               *dst
                                                  ){
     cudnnStatus_t status = CUDNN_STATUS_SUCCESS;
     int pad_h, pad_w;
@@ -230,8 +261,8 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionForward(        cudnnHandle_t         
     cudnnGetTensor4dDescriptor(srcDesc, &dataType, &N, &C, &H, &W,
                             &nStride, &cStride, &hStride, &wStride);
     assert(dataType == CUDNN_DATA_DOUBLE);
+    //printf("src strides %d %d %d %d\n", nStride, cStride, hStride, wStride);
     /*printf("pad %d %d\n", pad_h, pad_w);
-    printf("src strides %d %d %d %d\n", nStride, cStride, hStride, wStride);
     printf("src: N C H W %d %d %d %d\n", N, C, H, W);*/
 
 
@@ -240,28 +271,34 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionForward(        cudnnHandle_t         
     assert(dataType == CUDNN_DATA_DOUBLE);
     //printf("flt: K C H W %d %d %d %d\n", K, Cf, Hf, Wf);
 
-    int No, Co, Ho, Wo;
-    cudnnGetTensor4dDescriptor(destDesc, &dataType, &No, &Co, &Ho, &Wo,
-                            &nStride, &cStride, &hStride, &wStride);
+    int No, Ko, Ho, Wo;
+    int NySt, KySt, HySt, WySt;
+    cudnnGetTensor4dDescriptor(destDesc, &dataType, &No, &Ko, &Ho, &Wo, &NySt, &KySt, &HySt, &WySt);
+    //printf("dst strides %d %d %d %d\n", NySt, KySt, HySt, WySt);
     assert(dataType == CUDNN_DATA_DOUBLE);
     //printf("dst: N C H W %d %d %d %d\n", No, Co, Ho, Wo);
 
 
-    dim3 grid(N,K,1);
-    dim3 threads(Ho, Wo, 1); 
+    dim3 grid(Ho, Wo, 1); 
+    dim3 threads(N,K,1);
     if(mode == CUDNN_CROSS_CORRELATION){
         // xcorr(x,w)
-        krnlXCorr4d<<<grid,threads>>>(    (double *)srcData, N, C, H, W,
+        krnlXCorr4d<<<128,128>>>(   (double *)src, N, C, H, W,
+                                    (double *)flt, K, Cf, Hf, Wf, 
+                                    (double *)dst, No, Ko, Ho, Wo,
+                                    NySt, KySt, HySt, WySt,
+                                    pad_h, pad_w, No*Ko*Ho*Wo);
+        /*krnlXCorr4d<<<grid,threads>>>(    (double *)srcData, N, C, H, W,
                                             (double *)filterData, Hf, Wf, K,
-                                            (double *)destData, Ho, Wo, pad_h, pad_w);
+                                            (double *)destData, Ho, Wo, pad_h, pad_w);*/
         gpuErrchk( cudaPeekAtLastError() );
         gpuErrchk( cudaDeviceSynchronize() );
 
     }else if(mode == CUDNN_CONVOLUTION){
         // conv(x,w)
-        krnlConv4d<<<grid,threads>>>((double *)srcData, N, C, H, W,
-                                    (double *)filterData, Hf, Wf, K,
-                                    (double *)destData, Ho, Wo, pad_h, pad_w);
+        krnlConv4d<<<grid,threads>>>((double *)src, N, C, H, W,
+                                    (double *)flt, Hf, Wf, K,
+                                    (double *)dst, Ho, Wo, pad_h, pad_w);
         gpuErrchk( cudaPeekAtLastError() );
         gpuErrchk( cudaDeviceSynchronize() );
         //status = CUDNN_STATUS_NOT_SUPPORTED;
@@ -355,13 +392,11 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionBackwardData(  cudnnHandle_t          
     cudnnGetFilter4dDescriptor(filterDesc, &dataType, &K, &C, &Hw, &Ww);
 
     int N,Cy,Hy,Wy;
-    cudnnGetTensor4dDescriptor(diffDesc, &dataType, &N, &Cy, &Hy, &Wy,
-                            &nStride, &cStride, &hStride, &wStride);
+    cudnnGetTensor4dDescriptor(diffDesc, &dataType, &N, &Cy, &Hy, &Wy, &nStride, &cStride, &hStride, &wStride);
     assert(Cy==K); 
 
     int Nx,Cx,H,W;
-    cudnnGetTensor4dDescriptor(gradDesc, &dataType, &Nx, &Cx, &H, &W,
-                            &nStride, &cStride, &hStride, &wStride); 
+    cudnnGetTensor4dDescriptor(gradDesc, &dataType, &Nx, &Cx, &H, &W, &nStride, &cStride, &hStride, &wStride); 
     assert(Nx==N);assert(Cx==C);
 
     dim3 grid(N,C,1);
@@ -388,9 +423,6 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionBackwardData(  cudnnHandle_t          
     }
     return status;
 }
-
-/*
-   cudnnConvolutionBackwardBias(src::Tensor, [dest::Tensor]) Given src=dJ/dy this function computes and returns dest=dJ/db. It is assumed that there is a single scalar bias for each channel, i.e. the same number is added to every pixel of every image for that channel after the convolution. Thus dJ/db is simply the sum of dJ/dy across each channel, i.e. dest=sum(src,(1,2,4)). For 2-D images if src has size (W,H,C,N), dest will have size (1,1,C,1). If dest is not specified it will be allocated.*/
 
 cudnnStatus_t CUDNNWINAPI kunetConvolutionBackwardBias(   cudnnHandle_t                   handle,
                                                           const void                     *alpha,

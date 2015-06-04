@@ -1,31 +1,32 @@
 #include <stdio.h>
 #include <cudnn.h>
+#include <assert.h>
+#include <math.h>
+#include "kudnn.h"
+#include <limits.h>
 
-#define cat5d(A)    A[0],A[1],A[2],A[3],A[4]
 
-#define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
-inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort=true)
-{
-    if (code != cudaSuccess) 
-    {
-        fprintf(stderr,"GPUassert: %s %s %d\n", cudaGetErrorString(code), file, line);
-        if (abort) exit(code);
+__global__ void krnlXCorr5d(double *src, int N, int C, int H, int W, int D,
+                            double *flt, int Kw, int Cw, int Hf, int Wf, int Df,
+                            double *dst, int Ny, int K, int Hy, int Wy, int Dy,
+                            int hpad, int wpad, int dpad){
+    int i = threadIdx.x, k = threadIdx.y; 
+    int h = blockIdx.x, w = blockIdx.y, d = blockIdx.z;
+    int j,l,m,n;
+    int hsrc, wsrc, dsrc;
+
+    double sum=0;
+    for(j=0;j<C;j++){ 
+        for(l=0; l<Hf;l++){
+        for(m=0; m<Wf;m++){
+        for(n=0; n<Df;n++){
+            hsrc = h+l-hpad; wsrc = w+m-wpad; dsrc = d+n-dpad;
+            if(hsrc >= 0 && wsrc >= 0 &&  dsrc >= 0 &&  hsrc < H && wsrc < W && dsrc < D) 
+                sum += src[ind5d(C,H,W,D,i,j,hsrc,wsrc,dsrc)] * flt[ind5d(C,Hf,Wf,Df,k,j,l,m,n)];
+        }}}
     }
+    dst[ind5d(K,Hy,Wy,Dy,i,k,h,w,d)] = sum;
 }
-#define cudnnErrchk(ans) { cudnnAssert((ans), __FILE__, __LINE__); }
-inline void cudnnAssert(cudnnStatus_t code, const char *file, int line, bool abort=true)
-{
-    if (code != CUDNN_STATUS_SUCCESS) 
-    {
-        fprintf(stderr,"CUDNNassert: %s %s %d\n", cudnnGetErrorString(code), file, line);
-        if (abort) exit(code);
-    }
-}
-
-#define ind2d(w,i,j) ((i)*(w)+j)
-#define ind3d(h,w,i,j,k) ((i)*(h)*(w)+(j)*(w)+k)
-#define ind4d(c,h,w,i,j,k,l) ((i)*(c)*(h)*(w)+(j)*(h)*(w)+(k)*(w)+l)
-#define ind5d(c,h,w,d,i,j,k,l,m) ((i)*(c)*(h)*(w)*(d)+(j)*(h)*(w)*(d)+(k)*(w)*(d)+(l)*(d)+m)
 
 
 cudnnStatus_t CUDNNWINAPI kunetConvolutionForward(        cudnnHandle_t                     handle,
@@ -41,7 +42,62 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionForward(        cudnnHandle_t         
                                                           const void                         *beta,
                                                           const cudnnTensorDescriptor_t       destDesc,
                                                           void                               *destData
-                                                 );
+                                                 ){
+    cudnnStatus_t status = CUDNN_STATUS_SUCCESS;
+    cudnnDataType_t dataType; // image data type
+    cudnnConvolutionMode_t mode;
+    int ndimsreq=5; int convndimsreq=3;
+
+    int xndims, xDims[ndimsreq], xStrides[ndimsreq];
+    cudnnGetTensorNdDescriptor(srcDesc,  ndimsreq, &dataType, &xndims, xDims, xStrides);
+    assert(dataType == CUDNN_DATA_DOUBLE);
+
+    int wndims, wDims[ndimsreq];
+    cudnnGetFilterNdDescriptor(filterDesc, ndimsreq, &dataType, &wndims, wDims);
+    assert(dataType == CUDNN_DATA_DOUBLE);
+    printf("%d %d\n", xndims, wndims);
+    assert(xndims == wndims);
+
+    int yndims, yDims[ndimsreq], yStrides[ndimsreq];
+    cudnnGetTensorNdDescriptor(destDesc,  ndimsreq, &dataType, &yndims, yDims, yStrides);
+    assert(dataType == CUDNN_DATA_DOUBLE);
+    assert(xndims == yndims);
+
+    int convndims, convPad[convndimsreq], convStride[convndimsreq], convUpscale[convndimsreq];
+    cudnnGetConvolutionNdDescriptor(convDesc, convndimsreq, &convndims, convPad, convStride, convUpscale, &mode);
+    assert(convndims==(xndims-2));
+
+    printf("N:%d C:%d H:%d W:%d D:%d\n",        cat5d(xDims));
+    printf("K:%d C:%d Hw:%d Ww:%d Dw:%d\n",     cat5d(wDims));
+    printf("N:%d K:%d Hy:%d Wy:%d Dy:%d\n",     cat5d(yDims));
+    printf("\n");
+
+
+    dim3 threads(   yDims[0],   yDims[1],   1); // N K
+    dim3 grid(      yDims[2],   yDims[3],   yDims[4]); // Hy Wy Dy
+    if(mode == CUDNN_CROSS_CORRELATION){
+        // xcorr(x,w)
+        krnlXCorr5d<<<grid, threads>>>((double *)srcData, cat5d(xDims),
+                            (double *)filterData, cat5d(wDims),
+                            (double *)destData, cat5d(yDims), convPad[0], convPad[1], convPad[2]);
+        gpuErrchk( cudaPeekAtLastError() );
+        gpuErrchk( cudaDeviceSynchronize() );
+
+    }else if(mode == CUDNN_CONVOLUTION){
+        // conv(x,w)
+        status = CUDNN_STATUS_NOT_SUPPORTED;
+        /*krnlConv4d<<<grid,threads>>>((double *)srcData, N, C, H, W,
+                                    (double *)filterData, Hf, Wf, K,
+                                    (double *)destData, Ho, Wo, pad_h, pad_w);
+        gpuErrchk( cudaPeekAtLastError() );
+        gpuErrchk( cudaDeviceSynchronize() );*/
+        //status = CUDNN_STATUS_NOT_SUPPORTED;
+    }else{
+        status = CUDNN_STATUS_BAD_PARAM;
+    }
+    return status;
+}
+
 cudnnStatus_t CUDNNWINAPI kunetConvolutionBackwardFilter( cudnnHandle_t                       handle,
                                                           const void                         *alpha,
                                                           const cudnnTensorDescriptor_t       srcDesc,
@@ -52,7 +108,10 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionBackwardFilter( cudnnHandle_t         
                                                           const void                         *beta,
                                                           const cudnnFilterDescriptor_t       gradDesc,
                                                           void                               *gradData
-                                                        );
+                                                        ){
+    return CUDNN_STATUS_NOT_SUPPORTED;
+}
+
 cudnnStatus_t CUDNNWINAPI kunetConvolutionBackwardData(  cudnnHandle_t                       handle,
                                                          const void                         *alpha,
                                                          const cudnnFilterDescriptor_t       filterDesc,
@@ -63,7 +122,11 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionBackwardData(  cudnnHandle_t          
                                                          const void                         *beta,
                                                          const cudnnTensorDescriptor_t       gradDesc,
                                                          void                               *gradData
-                                                       );
+                                                       ){
+
+    return CUDNN_STATUS_NOT_SUPPORTED;
+}
+
 cudnnStatus_t CUDNNWINAPI kunetConvolutionBackwardBias(   cudnnHandle_t                   handle,
                                                           const void                     *alpha,
                                                           const cudnnTensorDescriptor_t   srcDesc,
@@ -71,7 +134,9 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionBackwardBias(   cudnnHandle_t         
                                                           const void                      *beta,
                                                           const cudnnTensorDescriptor_t   destDesc,
                                                           void                           *destData
-                                                      );
+                                                      ){
+    return CUDNN_STATUS_NOT_SUPPORTED;
+}
 
 cudnnStatus_t CUDNNWINAPI kunetPoolingForward(  cudnnHandle_t handle,
                                                 const cudnnPoolingDescriptor_t   poolingDesc,
@@ -81,7 +146,9 @@ cudnnStatus_t CUDNNWINAPI kunetPoolingForward(  cudnnHandle_t handle,
                                                 const void                      *beta,
                                                 const cudnnTensorDescriptor_t    destDesc,
                                                 void                            *destData
-                                             );
+                                             ){
+    return CUDNN_STATUS_NOT_SUPPORTED;
+}
 
 cudnnStatus_t CUDNNWINAPI kunetPoolingBackward( cudnnHandle_t                   handle,
                                                 const cudnnPoolingDescriptor_t  poolingDesc,
@@ -95,4 +162,6 @@ cudnnStatus_t CUDNNWINAPI kunetPoolingBackward( cudnnHandle_t                   
                                                 const void                     *beta,
                                                 const cudnnTensorDescriptor_t   destDiffDesc,
                                                 void                           *destDiffData
-                                              );
+                                              ){
+    return CUDNN_STATUS_NOT_SUPPORTED;
+}

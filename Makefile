@@ -178,7 +178,7 @@ SMS ?= 20 30 32 35 37 50
 else
 #SMS ?= 11 20 30 35 37 50
 #SMS ?= 20 30 35 37 50
-SMS ?= 20
+SMS ?= 30
 endif
 
 ifeq ($(SMS),)
@@ -208,9 +208,7 @@ endif
 ################################################################################
 
 # Target rules
-all: build
-
-build: cardiacsim0.bin cardiacsim1.bin cardiacsim2.bin cardiacsim3.bin cardiacsim4.bin bandwidthTest.bin
+all: tests
 
 check.deps:
 ifeq ($(SAMPLE_ENABLED),0)
@@ -224,10 +222,16 @@ bandwidthTest.o: bandwidthTest.cu
 bandwidthTest.bin: bandwidthTest.o
 	$(EXEC) $(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -o $@ $+ $(LIBRARIES)
 
-test%4d.o: test%4d.cu
+testConv%.o: testConv%.cu
 	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
 
-test%4d: test%4d.o kudnn1.o
+testConv%: testConv%.o kudnn%.o
+	$(EXEC) $(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -o $@ $+ $(LIBRARIES)
+
+testPool%.o: testPool%.cu
+	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
+
+testPool%: testPool%.o kudnn%.o
 	$(EXEC) $(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -o $@ $+ $(LIBRARIES)
 
 kudnn%.o: kudnn%.cu
@@ -236,30 +240,16 @@ kudnn%.o: kudnn%.cu
 kudnn%: kudnn%.o
 	$(EXEC) $(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -o $@ $+ $(LIBRARIES)
 
-toy.o: toy.cu
-	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
 
-toy: toy.o
-	$(EXEC) $(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -o $@ $+ $(LIBRARIES)
-
-cardiacsim%.o:cardiacsim%.cu
-	$(EXEC) $(NVCC) $(INCLUDES) $(ALL_CCFLAGS) $(GENCODE_FLAGS) -o $@ -c $<
-
-cardiacsim%.bin: cardiacsim%.o splot.o cmdLine.o
-	$(EXEC) $(NVCC) $(ALL_LDFLAGS) $(GENCODE_FLAGS) -o $@ $+ $(LIBRARIES)
-	$(EXEC) mkdir -p ./bin/$(OS_ARCH)/$(OSLOWER)/$(TARGET)$(if $(abi),/$(abi))
-	$(EXEC) cp $@ ./bin/$(OS_ARCH)/$(OSLOWER)/$(TARGET)$(if $(abi),/$(abi))
-
-run: build
-	$(EXEC) ./cardiacsim
+tests: testConv4d testPool4d testConv5d
+	./testConv4d xcorr v0
+	./testConv4d conv v0
+	./testPool4d
+	./testConv5d xcorr
 
 clean:
-	rm -f *.bin *.o
-	rm -rf ./bin/$(OS_ARCH)/$(OSLOWER)/$(TARGET)$(if $(abi),/$(abi))/*
+	rm -f testConv4d
+	rm -f testConv5d
+	rm -f testPool4d
+	rm -f testPool5d
 
-clobber: clean
-
-results: build
-	for i in 1 2 3 4; do ./cardiacsim$$i.bin -n 1024 -t 100;echo;done
-bSize: cardiacsim4.bin
-	for i in 4 8 16 32; do ./cardiacsim4.bin -n 1024 -t 100 -b $$i;echo;done

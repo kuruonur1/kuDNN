@@ -5,8 +5,8 @@ using CUDArt
 corrd = ConvolutionDescriptor(mode=CUDNN_CROSS_CORRELATION)
 convd = ConvolutionDescriptor(mode=CUDNN_CONVOLUTION)
 
-x = reshape(Float64[1:9],3,3,1,1); tx = CudaArray(x)
-w = reshape(Float64[1:4],2,2,1,1); tw = CudaArray(w)
+x = reshape(Float64[1:27],3,3,3,1,1); tx = CudaArray(x)
+w = reshape(Float64[1:8],2,2,2,1,1); tw = CudaArray(w)
 @show size(x) #3x3
 @show size(w) #2x2
 println("x:")

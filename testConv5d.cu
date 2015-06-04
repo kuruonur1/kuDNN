@@ -7,80 +7,84 @@
 #include "test.h"
 #include <string.h>
 
+#define prod5d(A)   (A[0]*A[1]*A[2]*A[3]*A[4])
+
+
 int main(int argc, char *argv[]){
-    int CONV, VERBOSE;
-    if(argc==3){
+    int CONV;
+    if(argc==2){
         if(!strcmp(argv[1], "conv"))
             CONV=1;
         else if(!strcmp(argv[1],"xcorr"))
             CONV=0;
-        else{
-            printf("usage: ./testConv4d xcorr/conv v[01]\n"); exit(-1);
-        }
-
-        if(!strcmp(argv[2], "v0"))
-            VERBOSE=0;
-        else if(!strcmp(argv[2],"v1"))
-            VERBOSE=1;
-        else{
-            printf("usage: ./testConv4d xcorr/conv v[01]\n"); exit(-1);
-        }
+        else
+            exit(-1);
     }else{
-        printf("usage: ./testConv4d xcorr/conv v[01]\n"); exit(-1);
+        printf("usage: ./testConv4d <mode>\n");
+        exit(-1);
     }
-
-    int N, C, H, W; // src
-    int K, Hw, Ww; // flt
-    if(VERBOSE){
-        N=1; C=1; H=5; W=4; // src
-        K=1; Hw=2; Ww=2; // flt
-    }else{
-        N=12; C=3; H=8; W=8; // src
-        K=5; Hw=5; Ww=4; // flt*/
-    }
-
-    assert(H>=Hw); assert(W>=Ww);
     srand(time(NULL));
-    const int Hy=H-Hw+1, Wy=W-Ww+1; // dst 
-    double xData[N*C*H*W]; fillRandom(xData,N*C*H*W);
-    double wData[K*C*Hw*Hw]; fillRandom(wData, K*C*Hw*Ww);
-    double dyData[N*K*Hy*Wy]; fillRandom(dyData, N*K*Hy*Wy);
+    /*int VERBOSE=1;
+    const int N=1, C=1, H=5, W=4; // src
+    const int K=1, Hw=2, Ww=2; // flt*/
+    int ii=0, XD=5;
+    int VERBOSE=0;
+    const int N=100, C=3, K=10;
+    const int xDims[5] = {N,    C,  28,                     28,                     28};                    // N C H W D
+    const int wDims[5] = {K,    C,  2,                     3,                      2};                     // K C Hw Ww Dw
+    const int yDims[5] = {N,    K,  xDims[2]-wDims[2]+1,    xDims[3]-wDims[3]+1,    xDims[4]-wDims[4]+1};   // N K  Hy Wy Dy; for stride=1
+    const int xStrides[5] = {   xDims[1]*xDims[2]*xDims[3]*xDims[4],
+                                xDims[2]*xDims[3]*xDims[4],
+                                xDims[3]*xDims[4],
+                                xDims[4],
+                                1};
+    const int yStrides[5] = {   yDims[1]*yDims[2]*yDims[3]*yDims[4],
+                                yDims[2]*yDims[3]*yDims[4],
+                                yDims[3]*yDims[4],
+                                yDims[4],
+                                1};
+    for(ii=2;ii<5;ii++){ assert(xDims[ii]>=wDims[ii]); assert(xDims[ii]>=yDims[ii]);}
 
-    printf("N:%d C:%d H:%d W:%d\n",N,C,H,W);
-    printf("K:%d C:%d Hw:%d Ww:%d\n",K,C,Hw,Ww);
-    printf("N:%d K:%d Hy:%d Wy:%d\n",N,K,Hy,Wy);
+    const int convPad[5-2] = {0,0,0};
+    const int convStride[5-2] = {1,1,1};
+    const int convUpscale[5-2] = {1,1,1};
+
+    double xData[prod5d(xDims)];    fillRandom(xData,   prod5d(xDims));
+    double wData[prod5d(wDims)];    fillRandom(wData,   prod5d(wDims));
+    double dyData[prod5d(yDims)];   fillRandom(dyData,  prod5d(yDims));
+
+    printf("N:%d C:%d H:%d W:%d D:%d\n",        cat5d(xDims));
+    printf("K:%d C:%d Hw:%d Ww:%d Dw:%d\n",     cat5d(wDims));
+    printf("N:%d K:%d Hy:%d Wy:%d Dy:%d\n",     cat5d(yDims));
     printf("\n");
 
-    if(VERBOSE){
-        printf("x:\n");
-        print2Dd(xData, H, W);
-        printf("w:\n");
-        print2Dd(wData, Hw, Ww);
-        printf("dy:\n");
-        print2Dd(dyData, Hy, Wy);
-        printf("\n");
-    }
+    printf("strides:\n");
+    printf("%d %d %d %d %d\n", cat5d(xStrides));
+    printf("%d %d %d %d %d\n", cat5d(yStrides));
 
-    
 
-    double *x_h = &xData[0], *w_h = &wData[0], *dy_h=&dyData[0]; // given
-    double dx_h[N*C*H*W], dw_h[C*K*Hw*Ww], y_h[N*K*Hy*Wy], db_h[1*K*1*1]; // compute cudnn
-    double dx1_h[N*C*H*W], dw1_h[K*C*Hw*Ww], y1_h[N*K*Hy*Wy], db1_h[1*K*1*1]; // compute kunet
-    double *x_d=NULL, *dx_d, *w_d, *dw_d, *y_d, *dy_d, *db_d; // gpu pointers
+    double *x_h = &xData[0],        *w_h = &wData[0],       *dy_h=&dyData[0];                           // given
+    double dx_h[prod5d(xDims)],     dw_h[prod5d(wDims)],    y_h[prod5d(yDims)],     db_h[1*K*1*1*1];    // compute cudnn
+    double dx1_h[prod5d(xDims)],    dw1_h[prod5d(wDims)],   y1_h[prod5d(yDims)],    db1_h[1*K*1*1*1];   // compute kunet
+    double *x_d, *dx_d, *w_d, *dw_d, *y_d, *dy_d, *db_d; // gpu pointers
 
-    gpuErrchk( cudaMalloc(&x_d, sizeof(double)*(N*C*H*W)) );
-    gpuErrchk( cudaMalloc(&dx_d, sizeof(double)*N*C*H*W) );
-    gpuErrchk( cudaMalloc(&w_d, sizeof(double)*K*C*Hw*Ww) );
-    gpuErrchk( cudaMalloc(&dw_d, sizeof(double)*K*C*Hw*Ww) );
-    gpuErrchk( cudaMalloc(&y_d, sizeof(double)*N*K*Hy*Wy) );
-    gpuErrchk( cudaMalloc(&dy_d, sizeof(double)*N*K*Hy*Wy) );
-    gpuErrchk( cudaMalloc(&db_d, sizeof(double)*1*K*1*1) );
+    printf("sizes:\n");
+    printf("%d\n",prod5d(xDims));
+    printf("%d\n",prod5d(wDims));
+    printf("%d\n",prod5d(yDims));
 
+    gpuErrchk( cudaMalloc(&x_d,     sizeof(double)*prod5d(xDims)) );
+    gpuErrchk( cudaMalloc(&dx_d,    sizeof(double)*prod5d(xDims)) );
+    gpuErrchk( cudaMalloc(&w_d,     sizeof(double)*prod5d(wDims)) );
+    gpuErrchk( cudaMalloc(&dw_d,    sizeof(double)*prod5d(wDims)) );
+    gpuErrchk( cudaMalloc(&y_d,     sizeof(double)*prod5d(yDims)) );
+    gpuErrchk( cudaMalloc(&dy_d,    sizeof(double)*prod5d(yDims)) );
+    gpuErrchk( cudaMalloc(&db_d,    sizeof(double)*1*K*1*1*1) );
 
     // send x, w, dy to GPU
-    gpuErrchk( cudaMemcpy(x_d, x_h, sizeof(double)*N*C*H*W, cudaMemcpyHostToDevice) );
-    gpuErrchk( cudaMemcpy(w_d, w_h, sizeof(double)*K*C*Hw*Ww, cudaMemcpyHostToDevice) );
-    gpuErrchk( cudaMemcpy(dy_d, dy_h, sizeof(double)*N*K*Hy*Wy, cudaMemcpyHostToDevice) );
+    gpuErrchk( cudaMemcpy(x_d,      x_h,    sizeof(double)*prod5d(xDims), cudaMemcpyHostToDevice) );
+    gpuErrchk( cudaMemcpy(w_d,      w_h,    sizeof(double)*prod5d(wDims), cudaMemcpyHostToDevice) );
+    gpuErrchk( cudaMemcpy(dy_d,     dy_h,   sizeof(double)*prod5d(yDims), cudaMemcpyHostToDevice) );
     // end send x, w, dy to GPU
     
     /**
@@ -112,15 +116,14 @@ int main(int argc, char *argv[]){
     // end creation
 
     // set
-    cudnnErrchk( cudnnSetTensor4dDescriptor(xDesc, CUDNN_TENSOR_NCHW, CUDNN_DATA_DOUBLE, N, C, H, W) );
-    cudnnErrchk( cudnnSetTensor4dDescriptor(dxDesc, CUDNN_TENSOR_NCHW, CUDNN_DATA_DOUBLE, N, C, H, W) );
-    cudnnErrchk( cudnnSetFilter4dDescriptor(wDesc, CUDNN_DATA_DOUBLE, K, C, Hw, Ww) );
-    cudnnErrchk( cudnnSetFilter4dDescriptor(dwDesc, CUDNN_DATA_DOUBLE, K, C, Hw, Ww) );
-    cudnnErrchk( cudnnSetTensor4dDescriptor(yDesc, CUDNN_TENSOR_NCHW, CUDNN_DATA_DOUBLE, N, K, Hy, Wy) );
-    cudnnErrchk( cudnnSetTensor4dDescriptor(dyDesc, CUDNN_TENSOR_NCHW, CUDNN_DATA_DOUBLE, N, K, Hy, Wy) );
-    cudnnErrchk( cudnnSetTensor4dDescriptor(dbDesc, CUDNN_TENSOR_NCHW, CUDNN_DATA_DOUBLE, 1, K, 1, 1) );
-    cudnnErrchk( cudnnSetConvolution2dDescriptor(xcorr00Desc, 0,0,1,1,1,1, CUDNN_CROSS_CORRELATION) );
-    cudnnErrchk( cudnnSetConvolution2dDescriptor(conv00Desc, 0,0,1,1,1,1, CUDNN_CONVOLUTION) );
+    cudnnErrchk( cudnnSetTensorNdDescriptor(xDesc, CUDNN_DATA_DOUBLE, 5, xDims, xStrides) );
+    cudnnErrchk( cudnnSetTensorNdDescriptor(dxDesc, CUDNN_DATA_DOUBLE, 5, xDims, xStrides) );
+    cudnnErrchk( cudnnSetFilterNdDescriptor(wDesc, CUDNN_DATA_DOUBLE, 5, wDims) );
+    cudnnErrchk( cudnnSetFilterNdDescriptor(dwDesc, CUDNN_DATA_DOUBLE, 5, wDims) );
+    cudnnErrchk( cudnnSetTensorNdDescriptor(yDesc, CUDNN_DATA_DOUBLE, 5, yDims, yStrides) );
+    cudnnErrchk( cudnnSetTensorNdDescriptor(dyDesc, CUDNN_DATA_DOUBLE, 5, yDims, yStrides) );
+    cudnnErrchk( cudnnSetConvolutionNdDescriptor(xcorr00Desc, 5-2, convPad, convStride, convUpscale, CUDNN_CROSS_CORRELATION) );
+    cudnnErrchk( cudnnSetConvolutionNdDescriptor(conv00Desc, 5-2, convPad, convStride, convUpscale, CUDNN_CONVOLUTION) );
     // end set input and conf
 
     // set conv mode
@@ -134,22 +137,29 @@ int main(int argc, char *argv[]){
     }
     // end set conv mode
 
+    // err chk
+    int y1Dims[5];
+    cudnnErrchk( cudnnGetConvolutionNdForwardOutputDim(tconvDesc, xDesc, wDesc, 5, y1Dims) );
+    printf("N:%d K:%d Hy:%d Wy:%d Dy:%d\n",     cat5d(y1Dims));
+    // end err chk
+
     // forward algo conf & workspace
-    double alpha=1, beta=1; //scaling params for input and output
     cudnnConvolutionFwdAlgo_t convFwdAlgo;
     cudnnConvolutionFwdPreference_t convFwdPref = CUDNN_CONVOLUTION_FWD_NO_WORKSPACE;
     void *workSpace = NULL; size_t workSpaceSize = 0, memLimit=0;
     cudnnErrchk( cudnnGetConvolutionForwardAlgorithm(handle, xDesc, wDesc, tconvDesc, yDesc, convFwdPref, memLimit, &convFwdAlgo) );
     cudnnErrchk( cudnnGetConvolutionForwardWorkspaceSize(handle, xDesc, wDesc, tconvDesc, yDesc, convFwdAlgo, &workSpaceSize) );
-    //printf("workspace size: %d\n", workSpaceSize);
+    printf("workspace size: %d\n", workSpaceSize);
     // end forward algo conf & workspace
 
     // forward test
     printf("\ny:\n");
-    cudnnErrchk( cudnnConvolutionForward(handle, &alpha, xDesc, x_d, wDesc, w_d, tconvDesc, convFwdAlgo, workSpace, workSpaceSize, &beta, yDesc, y_d) );
-    gpuErrchk( cudaMemcpy(y_h, y_d, sizeof(double)*N*K*Hy*Wy, cudaMemcpyDeviceToHost) );
+    double alpha=1, beta=1; //scaling params for input and output
+    //cudnnErrchk( cudnnConvolutionForward(handle, &alpha, xDesc, x_d, wDesc, w_d, tconvDesc, convFwdAlgo, workSpace, workSpaceSize, &beta, yDesc, y_d) );
     cudnnErrchk( kunetConvolutionForward(handle, &alpha, xDesc, x_d, wDesc, w_d, tconvDesc, convFwdAlgo, workSpace, workSpaceSize, &beta, yDesc, y_d) );
-    gpuErrchk( cudaMemcpy(y1_h, y_d, sizeof(double)*N*K*Hy*Wy, cudaMemcpyDeviceToHost) );
+    gpuErrchk( cudaMemcpy(y1_h, y_d, sizeof(double)*prod5d(yDims), cudaMemcpyDeviceToHost) );
+    /*
+    gpuErrchk( cudaMemcpy(y_h, y_d, sizeof(double)*N*K*Hy*Wy, cudaMemcpyDeviceToHost) );
     if(VERBOSE){ print2Dd(y_h, Hy, Wy); printf("\n"); print2Dd(y1_h, Hy, Wy);}
     assert(eqseq(y_h,y1_h,N*K*Hy*Wy) < 1.0E-4);
     printf("y: ok.\n");
@@ -188,6 +198,7 @@ int main(int argc, char *argv[]){
     assert(eqseq(db_h,db1_h,1*K*1*1) < 1.0E-4);
     printf("db: ok.\n\n");
     // end backward bias test
+    */
 
     printf("ok.\n");
 
