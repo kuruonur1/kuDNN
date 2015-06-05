@@ -1,1 +1,2 @@
 # kudnn
+type make tests
