@@ -6,6 +6,24 @@
 #include <time.h>
 #include "test.h"
 #include <string.h>
+#include <sys/time.h>
+
+static const double kMicro = 1.0e-6;
+double getTime()
+{
+    struct timeval TV;
+    struct timezone TZ;
+
+    const int RC = gettimeofday(&TV, &TZ);
+    if(RC == -1) {
+        //cerr << "ERROR: Bad call to gettimeofday" << endl;
+        printf("ERROR: Bad call to gettimeofday\n");
+        return(-1);
+    }
+
+    return( ((double)TV.tv_sec) + kMicro * ((double)TV.tv_usec) );
+
+}  // end getTime()
 
 int main(int argc, char *argv[]){
     int CONV, VERBOSE;
@@ -35,8 +53,12 @@ int main(int argc, char *argv[]){
         N=1; C=1; H=5; W=4; // src
         K=1; Hw=2; Ww=2; // flt
     }else{
-        N=12; C=3; H=8; W=8; // src
-        K=5; Hw=5; Ww=4; // flt*/
+        /*
+        N=28; C=3; H=40; W=80; // src
+        K=5; Hw=8; Ww=7; // flt
+        */
+        N=128; C=3; H=640; W=480; // src
+        K=5; Hw=18; Ww=17; // flt
     }
 
     assert(H>=Hw); assert(W>=Ww);
@@ -45,6 +67,8 @@ int main(int argc, char *argv[]){
     double xData[N*C*H*W]; fillRandom(xData,N*C*H*W);
     double wData[K*C*Hw*Hw]; fillRandom(wData, K*C*Hw*Ww);
     double dyData[N*K*Hy*Wy]; fillRandom(dyData, N*K*Hy*Wy);
+
+    double t0, time_elapsed;
 
     printf("N:%d C:%d H:%d W:%d\n",N,C,H,W);
     printf("K:%d C:%d Hw:%d Ww:%d\n",K,C,Hw,Ww);
@@ -146,9 +170,15 @@ int main(int argc, char *argv[]){
 
     // forward test
     printf("\ny:\n");
+    t0 = getTime();
     cudnnErrchk( cudnnConvolutionForward(handle, &alpha, xDesc, x_d, wDesc, w_d, tconvDesc, convFwdAlgo, workSpace, workSpaceSize, &beta, yDesc, y_d) );
+    gpuErrchk( cudaPeekAtLastError() ); gpuErrchk( cudaDeviceSynchronize() );
+    time_elapsed = getTime() - t0; printf("cudnn: %.4f\n",time_elapsed);
     gpuErrchk( cudaMemcpy(y_h, y_d, sizeof(double)*N*K*Hy*Wy, cudaMemcpyDeviceToHost) );
+
+    t0 = getTime();
     cudnnErrchk( kunetConvolutionForward(handle, &alpha, xDesc, x_d, wDesc, w_d, tconvDesc, convFwdAlgo, workSpace, workSpaceSize, &beta, yDesc, y_d) );
+    time_elapsed = getTime() - t0; printf("kudnn: %.4f\n",time_elapsed);
     gpuErrchk( cudaMemcpy(y1_h, y_d, sizeof(double)*N*K*Hy*Wy, cudaMemcpyDeviceToHost) );
     if(VERBOSE){ print2Dd(y_h, Hy, Wy); printf("\n"); print2Dd(y1_h, Hy, Wy);}
     assert(eqseq(y_h,y1_h,N*K*Hy*Wy) < 1.0E-4);
@@ -157,9 +187,15 @@ int main(int argc, char *argv[]){
 
     // backward filter test
     printf("\ndw:\n");
+    t0 = getTime();
     cudnnErrchk( cudnnConvolutionBackwardFilter(handle, &alpha, xDesc, x_d, dyDesc, dy_d, tconvDesc, &beta, dwDesc, dw_d) );
+    gpuErrchk( cudaPeekAtLastError() ); gpuErrchk( cudaDeviceSynchronize() );
+    time_elapsed = getTime() - t0; printf("cudnn: %.4f\n",time_elapsed);
     gpuErrchk( cudaMemcpy(dw_h, dw_d, sizeof(double)*K*C*Hw*Ww, cudaMemcpyDeviceToHost) );
+
+    t0 = getTime();
     cudnnErrchk( kunetConvolutionBackwardFilter(handle, &alpha, xDesc, x_d, dyDesc, dy_d, tconvDesc, &beta, dwDesc, dw_d) );
+    time_elapsed = getTime() - t0; printf("kudnn: %.4f\n",time_elapsed);
     gpuErrchk( cudaMemcpy(dw1_h, dw_d, sizeof(double)*K*C*Hw*Ww, cudaMemcpyDeviceToHost) );
     if(VERBOSE){ print2Dd(dw_h, Hw, Ww); printf("\n"); print2Dd(dw1_h, Hw, Ww);}
     assert(eqseq(dw_h,dw1_h,K*C*Hw*Ww) < 1.0E-4);
@@ -169,15 +205,22 @@ int main(int argc, char *argv[]){
 
     // backward data test
     printf("\ndx:\n");
+    t0 = getTime();
     cudnnErrchk( cudnnConvolutionBackwardData(handle, &alpha, wDesc, w_d, dyDesc, dy_d, tconvDesc, &beta, dxDesc, dx_d) );
+    gpuErrchk( cudaPeekAtLastError() ); gpuErrchk( cudaDeviceSynchronize() );
+    time_elapsed = getTime() - t0; printf("cudnn: %.4f\n",time_elapsed);
     gpuErrchk( cudaMemcpy(dx_h, dx_d, sizeof(double)*N*C*H*W, cudaMemcpyDeviceToHost) );
+
+    t0 = getTime();
     cudnnErrchk( kunetConvolutionBackwardData(handle, &alpha, wDesc, w_d, dyDesc, dy_d, tconvDesc, &beta, dxDesc, dx_d) );
+    time_elapsed = getTime() - t0; printf("kudnn: %.4f\n",time_elapsed);
     gpuErrchk( cudaMemcpy(dx1_h, dx_d, sizeof(double)*N*C*H*W, cudaMemcpyDeviceToHost) );
     if(VERBOSE){print2Dd(dx_h, H, W); printf("\n");print2Dd(dx1_h, H, W);}
     assert(eqseq(dx_h,dx1_h,N*C*H*W) < 1.0E-4);
     printf("dx: ok.\n");
     // end backward data test
 
+    /*
     // backward bias test
     printf("\ndb:\n");
     cudnnErrchk( cudnnConvolutionBackwardBias(handle, &alpha, dyDesc, dy_d, &beta, dbDesc, db_d) );
@@ -188,6 +231,7 @@ int main(int argc, char *argv[]){
     assert(eqseq(db_h,db1_h,1*K*1*1) < 1.0E-4);
     printf("db: ok.\n\n");
     // end backward bias test
+    */
 
     printf("ok.\n");
 

@@ -5,8 +5,12 @@
 #include "kudnn.h"
 #include <limits.h>
 
+#define BLK 4096
+#define THR 256
 
 
+
+// POOLING
 __global__ void krnlMaxPool4d( double *src, int N, int C, int H, int W,
                             int Hd, int Wd, int Hs, int Ws,
                             double *dst, int Hy, int Wy){
@@ -61,133 +65,9 @@ __global__ void krnlMaxPool4dDx( double *y, int N, int C, int Hy, int Wy,
         }
     }}
 }
+// END POOLING
 
-
-__global__ void krnlBackBias4d( double *src, int N, int C, int H, int W,
-                            double *dst){
-    int j = threadIdx.x;
-    int i,k,l;
-    double sum=0;
-    for(i=0;i<N;i++){ 
-        for(k=0;k<H;k++){ 
-        for(l=0;l<W;l++){ 
-        sum += src[ind4d(C,H,W,i,j,k,l)];
-        }}
-    }
-    dst[ind4d(C,H,W,1,j,1,1)] = sum;
-}
-
-__global__ void krnlXCorr4dDx( double *src, int N, int K, int Hy, int Wy,
-                            double *flt, int Hw, int Ww, int C,
-                            double *dst, int H, int W, int hpad, int wpad){
-    // mode:conv dx=xcorr(dy,w,'full')
-    int i = blockIdx.x; int j = blockIdx.y; 
-    int h = threadIdx.x; int w = threadIdx.y; 
-    int k,l,m;
-    double sum=0;
-    int hsrc, wsrc;
-    for(k=0;k<K;k++){
-    for(l=0; l<Hw;l++){
-    for(m=0; m<Ww;m++){
-        hsrc = h+l-hpad; //int hsrc = h+Hf-1-l;
-        wsrc = w+m-wpad;
-        if(hsrc >= 0 && wsrc >= 0 && hsrc < Hy && wsrc < Wy) 
-            sum += src[ind4d(K,Hy,Wy,i,k,hsrc,wsrc)] * flt[ind4d(C,Hw,Ww,k,j,l,m)];
-    }}}
-    dst[ind4d(C,H,W,i,j,h,w)] = sum;
-}
-
-__global__ void krnlXCorr4dDw( double *src, int N, int C, int H, int W,
-                            double *flt, int Hy, int Wy, int K,
-                            double *dst, int Hw, int Ww, int hpad, int wpad){
-    // mode:xcorr dw=xcorr(x,dy)
-    int k = blockIdx.x; int j = blockIdx.y; 
-    int h = threadIdx.x; int w = threadIdx.y; 
-    int i,l,m;
-    double sum=0;
-    int hsrc, wsrc;
-    for(i=0;i<N;i++){ 
-    for(l=0; l<Hy;l++){
-    for(m=0; m<Wy;m++){
-        hsrc = h+l-hpad; //int hsrc = h+Hf-1-l;
-        wsrc = w+m-wpad;
-        if(hsrc >= 0 && wsrc >= 0 && hsrc < H && wsrc < W) 
-            sum += src[ind4d(C,H,W,i,j,hsrc,wsrc)] * flt[ind4d(K,Hy,Wy,i,k,l,m)];
-    }}}
-    dst[ind4d(C,Hw,Ww,k,j,h,w)] = sum;
-}
-
-__global__ void krnlXCorr4dDwRot180( double *src, int N, int C, int H, int W,
-                            double *flt, int Hy, int Wy, int K,
-                            double *dst, int Hw, int Ww, int hpad, int wpad){
-    // mode:conv dw=rot180(xcorr(x,dy))
-    int k = blockIdx.x; int j = blockIdx.y; 
-    int h = threadIdx.x; int w = threadIdx.y; 
-    int i,l,m;
-    double sum=0;
-    int hsrc, wsrc;
-    for(i=0;i<N;i++){ 
-    for(l=0; l<Hy;l++){
-    for(m=0; m<Wy;m++){
-        hsrc = h+l-hpad; //int hsrc = h+Hf-1-l;
-        wsrc = w+m-wpad;
-        if(hsrc >= 0 && wsrc >= 0 && hsrc < H && wsrc < W) 
-            sum += src[ind4d(C,H,W,i,j,hsrc,wsrc)] * flt[ind4d(K,Hy,Wy,i,k,l,m)];
-    }}}
-    dst[ind4d(C,Hw,Ww,k,j,Hw-h-1,Ww-w-1)] = sum;
-}
-
-__global__ void krnlXCorr4d(    double *src, int N, int C, int H, int W,
-                                double *flt, int K, int Cw, int Hw, int Ww, 
-                                double *dst, int Ny, int Ky, int Hy, int Wy,
-                                int NySt, int KySt, int HySt, int WySt,
-                                int hpad, int wpad, const int lim){
-    // mode:xcorr y=xcorr(x,w) // all the other krnls will be rewritten like this.
-    // output N K Hy Wy
-    int i,k,h,w, j,l,m, g,cumul, hsrc, wsrc;
-    g = threadIdx.x + blockIdx.x * blockDim.x;
-    while(g < lim){
-        cumul=g;
-        i=cumul/NySt; cumul -= i*NySt;
-        k=cumul/KySt; cumul -= k*KySt;
-        h=cumul/HySt; cumul -= h*HySt;
-        w=cumul/WySt;
-
-        double sum=0;
-        for(j=0;j<C;j++){ 
-        for(l=0; l<Hw;l++){
-        for(m=0; m<Ww;m++){
-            hsrc = h+l-hpad; //int hsrc = h+Hf-1-l;
-            wsrc = w+m-wpad;
-            if(hsrc >= 0 && wsrc >= 0 && hsrc < H && wsrc < W) 
-                sum += src[ind4d(C,H,W,i,j,hsrc,wsrc)] * flt[ind4d(C,Hw,Ww,k,j,l,m)];
-        }}}
-        dst[g] = sum; // dst[ind4d(K,Hy,Wy,i,k,h,w)] = sum;
-
-        g += blockDim.x * gridDim.x;
-    }
-}
-
-/*__global__ void krnlXCorr4d2( double *src, int N, int C, int H, int W,
-                            double *flt, int Hf, int Wf, int K,
-                            double *dst, int Ho, int Wo, int hpad, int wpad){
-    //int i = blockIdx.x; int k = blockIdx.y; int h = threadIdx.x; int w = threadIdx.y; 
-    int h = blockIdx.x; int w = blockIdx.y; int i = threadIdx.x; int k = threadIdx.y; 
-    int j,l,m;
-    double sum=0;
-    int hsrc, wsrc;
-    sum=0;
-    for(j=0;j<C;j++){ 
-    for(l=0; l<Hf;l++){
-    for(m=0; m<Wf;m++){
-        hsrc = h+l-hpad; //int hsrc = h+Hf-1-l;
-        wsrc = w+m-wpad;
-        if(hsrc >= 0 && wsrc >= 0 && hsrc < H && wsrc < W) 
-            sum += src[ind4d(C,H,W,i,j,hsrc,wsrc)] * flt[ind4d(C,Hf,Wf,k,j,l,m)];
-    }}}
-    dst[ind4d(K,Ho,Wo,i,k,h,w)] = sum;
-}*/
-
+// CONVOLUTION
 __global__ void krnlConv4d( double *src, int N, int C, int H, int W,
                             double *flt, int Hf, int Wf, int K,
                             double *dst, int Ho, int Wo, int hpad, int wpad){
@@ -211,7 +91,139 @@ __global__ void krnlConv4d( double *src, int N, int C, int H, int W,
 }
 
 
-__global__ void krnlConv4dDx( double *src, int N, int K, int H, int W,
+
+__global__ void krnlXCorr4dDx( double *src, int N, int K, int Hy, int Wy,
+                            double *flt, int Hw, int Ww, int C,
+                            double *dst, int H, int W, int hpad, int wpad){
+    // mode:conv dx=xcorr(dy,w,'full')
+    int i = blockIdx.x; int j = blockIdx.y; 
+    int h = threadIdx.x; int w = threadIdx.y; 
+    int k,l,m;
+    double sum=0;
+    int hsrc, wsrc;
+    for(k=0;k<K;k++){
+    for(l=0; l<Hw;l++){
+    for(m=0; m<Ww;m++){
+        hsrc = h+l-hpad; //int hsrc = h+Hf-1-l;
+        wsrc = w+m-wpad;
+        if(hsrc >= 0 && wsrc >= 0 && hsrc < Hy && wsrc < Wy) 
+            sum += src[ind4d(K,Hy,Wy,i,k,hsrc,wsrc)] * flt[ind4d(C,Hw,Ww,k,j,l,m)];
+    }}}
+    dst[ind4d(C,H,W,i,j,h,w)] = sum;
+}
+
+
+__global__ void krnlXCorr4dDwRot180( double *src, int N, int C, int H, int W,
+                            double *flt, int Hy, int Wy, int K,
+                            double *dst, int Hw, int Ww, int hpad, int wpad){
+    // mode:conv dw=rot180(xcorr(x,dy))
+    int k = blockIdx.x; int j = blockIdx.y; 
+    int h = threadIdx.x; int w = threadIdx.y; 
+    int i,l,m;
+    double sum=0;
+    int hsrc, wsrc;
+    for(i=0;i<N;i++){ 
+    for(l=0; l<Hy;l++){
+    for(m=0; m<Wy;m++){
+        hsrc = h+l-hpad; //int hsrc = h+Hf-1-l;
+        wsrc = w+m-wpad;
+        if(hsrc >= 0 && wsrc >= 0 && hsrc < H && wsrc < W) 
+            sum += src[ind4d(C,H,W,i,j,hsrc,wsrc)] * flt[ind4d(K,Hy,Wy,i,k,l,m)];
+    }}}
+    dst[ind4d(C,Hw,Ww,k,j,Hw-h-1,Ww-w-1)] = sum;
+}
+
+// END CONVOLUTION
+
+// CROSS CORRELATION
+__global__ void krnlXCorrY4d(    double *src, int N, int C, int H, int W,
+                                double *flt, int K, int Cw, int Hw, int Ww, 
+                                double *dst, int Ny, int Ky, int Hy, int Wy,
+                                int NySt, int KySt, int HySt, int WySt,
+                                int hpad, int wpad, const int lim){
+    // mode:xcorr y=xcorr(x,w) // all the other krnls will be rewritten like this.
+    // output N K Hy Wy
+    int i,k,h,w, j,l,m, g,cumul, hsrc, wsrc;
+    
+    for(g = threadIdx.x + blockIdx.x * blockDim.x; g < lim; g += blockDim.x * gridDim.x){
+        cumul=g;
+        i=cumul/NySt; cumul -= i*NySt;
+        k=cumul/KySt; cumul -= k*KySt;
+        h=cumul/HySt; cumul -= h*HySt;
+        w=cumul/WySt;
+
+        double sum=0;
+        for(j=0;j<C;j++){ 
+        for(l=0; l<Hw;l++){
+        for(m=0; m<Ww;m++){
+            hsrc = h+l-hpad; //int hsrc = h+Hf-1-l;
+            wsrc = w+m-wpad;
+            if(hsrc >= 0 && wsrc >= 0 && hsrc < H && wsrc < W) 
+                sum += src[ind4d(C,H,W,i,j,hsrc,wsrc)] * flt[ind4d(C,Hw,Ww,k,j,l,m)];
+        }}}
+        dst[g] = sum; // dst[ind4d(K,Hy,Wy,i,k,h,w)] = sum;
+    }
+}
+
+__global__ void krnlXCorrDw4d(  double *src, int N, int C, int H, int W,
+                                double *flt, int Ny, int Ky, int Hy, int Wy,
+                                double *dst, int K, int Cw, int Hw, int Ww, 
+                                int KSt, int CSt, int HwSt, int WwSt,
+                                int hpad, int wpad, const int lim){
+    // mode:xcorr dw = xcorr(x,dy)
+    int i,k,h,w, j,l,m, g,cumul, hsrc, wsrc; // k j
+
+    for(g = threadIdx.x + blockIdx.x * blockDim.x; g < lim; g += blockDim.x * gridDim.x){
+        cumul=g;
+        k=cumul/KSt; cumul -= k*KSt;
+        j=cumul/CSt; cumul -= j*CSt;
+        h=cumul/HwSt; cumul -= h*HwSt;
+        w=cumul/WwSt;
+
+        double sum=0;
+        for(i=0;i<N;i++){ 
+        for(l=0; l<Hy;l++){
+        for(m=0; m<Wy;m++){
+            hsrc = h+l-hpad; //int hsrc = h+Hf-1-l;
+            wsrc = w+m-wpad;
+            if(hsrc >= 0 && wsrc >= 0 && hsrc < H && wsrc < W) 
+                sum += src[ind4d(C,H,W,i,j,hsrc,wsrc)] * flt[ind4d(K,Hy,Wy,i,k,l,m)];
+        }}}
+        dst[g] = sum; // dst[ind4d(C,Hw,Ww,k,j,h,w)] = sum;
+    }
+}
+
+__global__ void krnlXCorrDx4d(
+                                double *src, int Ny, int Ky, int Hy, int Wy,
+                                double *flt, int K, int Cw, int Hw, int Ww, 
+                                double *dst, int N, int C, int H, int W,
+                                int NSt, int CSt, int HSt, int WSt,
+                                int hpad, int wpad, const int lim){
+    // mode:xcorr dx=conv(dy,w,'full')
+    int i,j,h,w, k,l,m, g,cumul, hsrc, wsrc; // i j
+    
+    for(g = threadIdx.x + blockIdx.x * blockDim.x; g < lim; g += blockDim.x * gridDim.x){
+        cumul=g;
+        i=cumul/NSt; cumul -= i*NSt;
+        j=cumul/CSt; cumul -= j*CSt;
+        h=cumul/HSt; cumul -= h*HSt;
+        w=cumul/WSt;
+
+        double sum=0;
+        for(k=0;k<K;k++){
+        for(l=Hw-1; l>=0;l--){
+        for(m=Ww-1; m>=0;m--){
+            hsrc = h+Hw-1-l-hpad; //int hsrc = h+Hf-1-l;
+            wsrc = w+Ww-1-m-wpad;
+            if(hsrc >= 0 && wsrc >= 0 && hsrc < Hy && wsrc < Wy) 
+                sum += src[ind4d(K,Hy,Wy,i,k,hsrc,wsrc)] * flt[ind4d(C,Hw,Ww,k,j,l,m)];
+        }}}
+        dst[g] = sum; // dst[ind4d(C,Hy,Wy,i,j,h,w)] = sum;
+    }
+
+}
+
+/*__global__ void krnlConv4dDx( double *src, int N, int K, int H, int W,
                             double *flt, int Hf, int Wf, int C,
                             double *dst, int Ho, int Wo, int hpad, int wpad){
     // mode:xcorr dx=conv(dy,w,'full')
@@ -229,6 +241,21 @@ __global__ void krnlConv4dDx( double *src, int N, int K, int H, int W,
             sum += src[ind4d(K,H,W,i,k,hsrc,wsrc)] * flt[ind4d(C,Hf,Wf,k,j,l,m)];
     }}}
     dst[ind4d(C,Ho,Wo,i,j,h,w)] = sum;
+}*/
+// END CROSS CORRELATION
+
+__global__ void krnlBackBias4d( double *src, int N, int C, int H, int W,
+                            double *dst){
+    int j = threadIdx.x;
+    int i,k,l;
+    double sum=0;
+    for(i=0;i<N;i++){ 
+        for(k=0;k<H;k++){ 
+        for(l=0;l<W;l++){ 
+        sum += src[ind4d(C,H,W,i,j,k,l)];
+        }}
+    }
+    dst[ind4d(C,H,W,1,j,1,1)] = sum;
 }
 
 // CUDNN LIKE API
@@ -279,11 +306,9 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionForward(        cudnnHandle_t         
     //printf("dst: N C H W %d %d %d %d\n", No, Co, Ho, Wo);
 
 
-    dim3 grid(Ho, Wo, 1); 
-    dim3 threads(N,K,1);
     if(mode == CUDNN_CROSS_CORRELATION){
         // xcorr(x,w)
-        krnlXCorr4d<<<128,128>>>(   (double *)src, N, C, H, W,
+        krnlXCorrY4d<<<BLK,THR>>>(   (double *)src, N, C, H, W,
                                     (double *)flt, K, Cf, Hf, Wf, 
                                     (double *)dst, No, Ko, Ho, Wo,
                                     NySt, KySt, HySt, WySt,
@@ -296,6 +321,8 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionForward(        cudnnHandle_t         
 
     }else if(mode == CUDNN_CONVOLUTION){
         // conv(x,w)
+        dim3 grid(Ho, Wo, 1); 
+        dim3 threads(N,K,1);
         krnlConv4d<<<grid,threads>>>((double *)src, N, C, H, W,
                                     (double *)flt, Hf, Wf, K,
                                     (double *)dst, Ho, Wo, pad_h, pad_w);
@@ -348,9 +375,15 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionBackwardFilter( cudnnHandle_t         
 
     if(mode == CUDNN_CROSS_CORRELATION){
         // xcorr(x,dy);
-        krnlXCorr4dDw<<<grid,threads>>>(    (double *)srcData, N, C, H, W,
+        krnlXCorrDw4d<<<BLK,THR>>>( (double *)srcData, N, C, H, W,
+                                    (double *)diffData, Ny, Cy, Hy, Wy,
+                                    (double *)gradData, K, Cw, Hw, Ww, 
+                                            C*Hw*Ww, Hw*Ww, Ww, 1,
+                                                //KSt, CSt, HwSt, WwSt,
+                                                0, 0, K*Cw*Hw*Ww);
+        /*krnlXCorrDw4d<<<grid,threads>>>(    (double *)srcData, N, C, H, W,
                                             (double *)diffData, Hy, Wy, K,
-                                            (double *)gradData, Hw, Ww, 0, 0);
+                                            (double *)gradData, Hw, Ww, 0, 0);*/
         gpuErrchk( cudaPeekAtLastError() );
         gpuErrchk( cudaDeviceSynchronize() );
 
@@ -404,9 +437,14 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionBackwardData(  cudnnHandle_t          
 
     if(mode == CUDNN_CROSS_CORRELATION){
         // conv(dy,w,'full');
-        krnlConv4dDx<<<grid,threads>>>(    (double *)diffData, N, K, Hy, Wy,
+        krnlXCorrDx4d<<<BLK,THR>>>( (double *)diffData, N, Cy, Hy, Wy,
+                                    (double *)filterData, K, C, Hw, Ww, 
+                                    (double *)gradData, Nx, Cx, H, W,
+                                    Cx*H*W, H*W, W, 1,
+                                    Hw-1, Ww-1, Nx*Cx*H*W);
+        /*krnlXcorr4dDx<<<BLK,threads>>>(    (double *)diffData, N, K, Hy, Wy,
                                             (double *)filterData, Hw, Ww, C,
-                                            (double *)gradData, H, W, Hw-1, Ww-1);
+                                            (double *)gradData, H, W, Hw-1, Ww-1);*/
         gpuErrchk( cudaPeekAtLastError() );
         gpuErrchk( cudaDeviceSynchronize() );
 
@@ -475,9 +513,11 @@ cudnnStatus_t CUDNNWINAPI kunetPoolingForward(  cudnnHandle_t handle,
                             strides, strides+1, strides+2, strides+3);
     assert(N==No); assert(C==K);
 
+    /*
     printf("N:%d C:%d H:%d W:%d\n",N,C,H,W);
     printf("Hd:%d Wd:%d Hs:%d Ws:%d Hp:%d Wp:%d\n",Hd,Wd,Hs,Ws,Hp,Wp);
     printf("N:%d K:%d Hy:%d Wy:%d\n",N,C,Hy,Wy);
+    */
 
     dim3 grid(N,K,1);
     dim3 threads(Hy, Wy, 1); 

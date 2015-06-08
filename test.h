@@ -1,4 +1,5 @@
 
+
 inline void print2Dd(double *E, int h, int w){
     int i,j;
     for(i=0;i<h;i++){

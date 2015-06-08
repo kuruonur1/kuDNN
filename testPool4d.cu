@@ -5,14 +5,32 @@
 #include "kudnn.h"
 #include <time.h>
 #include "test.h"
+#include <sys/time.h>
+
+static const double kMicro = 1.0e-6;
+double getTime()
+{
+    struct timeval TV;
+    struct timezone TZ;
+
+    const int RC = gettimeofday(&TV, &TZ);
+    if(RC == -1) {
+        //cerr << "ERROR: Bad call to gettimeofday" << endl;
+        printf("ERROR: Bad call to gettimeofday\n");
+        return(-1);
+    }
+
+    return( ((double)TV.tv_sec) + kMicro * ((double)TV.tv_usec) );
+
+}  // end getTime()
 
 
 int main(){
     int VERBOSE=0;
     //int PMODE=1; // max
     srand(time(NULL));
-    const int N=128, C=11, H=23, W=22; // src
-    const int K=C, Hd=6, Wd=5; // window
+    const int N=128, C=3, H=640, W=480; // src
+    const int K=C, Hd=28, Wd=28; // window
     const int Hs=Hd, Ws=Hd; // stride
     const int Hp=0, Wp=0; // padding
     assert(H>=Hd); assert(W>=Wd);
@@ -34,6 +52,7 @@ int main(){
         printf("\n");
     }
 
+    double t0, time_elapsed;
 
     double *x_h = &xData[0], *dy_h = &dyData[0]; // given
     double y_h[N*C*Hy*Wy], dx_h[N*C*H*W]; // compute cudnn
@@ -88,9 +107,15 @@ int main(){
 
     // forward test
     printf("y:\n");
+    t0 = getTime();
     cudnnErrchk( cudnnPoolingForward(handle, tpoolDesc, &alpha, xDesc, x_d, &beta, yDesc, y_d) );
+    gpuErrchk( cudaPeekAtLastError() ); gpuErrchk( cudaDeviceSynchronize() );
+    time_elapsed = getTime() - t0; printf("cudnn: %.4f\n",time_elapsed);
     gpuErrchk( cudaMemcpy(y_h, y_d, sizeof(double)*N*K*Hy*Wy, cudaMemcpyDeviceToHost) );
+
+    t0 = getTime();
     cudnnErrchk( kunetPoolingForward(handle, tpoolDesc, &alpha, xDesc, x_d, &beta, yDesc, y_d) );
+    time_elapsed = getTime() - t0; printf("kudnn: %.4f\n",time_elapsed);
     gpuErrchk( cudaMemcpy(y1_h, y_d, sizeof(double)*N*K*Hy*Wy, cudaMemcpyDeviceToHost) );
     if(VERBOSE){print2Dd(y_h, Hy, Wy); printf("\n"); print2Dd(y1_h, Hy, Wy);}
     assert(eqseq(y_h,y1_h,N*K*Hy*Wy) < 1.0E-4);
@@ -99,9 +124,15 @@ int main(){
 
     // backward test
     printf("dx:\n");
+    t0 = getTime();
     cudnnErrchk( cudnnPoolingBackward(handle, tpoolDesc, &alpha, yDesc, y_d, dyDesc, dy_d, xDesc, x_d, &beta, dxDesc, dx_d) );
+    gpuErrchk( cudaPeekAtLastError() ); gpuErrchk( cudaDeviceSynchronize() );
+    time_elapsed = getTime() - t0; printf("cudnn: %.4f\n",time_elapsed);
     gpuErrchk( cudaMemcpy(dx_h, dx_d, sizeof(double)*N*C*H*W, cudaMemcpyDeviceToHost) );
+
+    t0 = getTime();
     cudnnErrchk( kunetPoolingBackward(handle, tpoolDesc, &alpha, yDesc, y_d, dyDesc, dy_d, xDesc, x_d, &beta, dxDesc, dx_d) );
+    time_elapsed = getTime() - t0; printf("kudnn: %.4f\n",time_elapsed);
     gpuErrchk( cudaMemcpy(dx1_h, dx_d, sizeof(double)*N*C*H*W, cudaMemcpyDeviceToHost) );
     if(VERBOSE){print2Dd(dx_h, H, W); printf("\n");print2Dd(dx1_h, H, W);}
     assert(eqseq(dx_h,dx1_h,N*C*H*W) < 1.0E-4);
