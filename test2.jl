@@ -2,40 +2,31 @@ using CUDNN: cudnnConvolutionBackwardBias, cudnnConvolutionBackwardFilter, cudnn
 using CUDNN: ConvolutionDescriptor, CUDNN_CROSS_CORRELATION, CUDNN_CONVOLUTION
 using CUDArt
 
-corrd = ConvolutionDescriptor(padding=(1,1), mode=CUDNN_CROSS_CORRELATION)
-convd = ConvolutionDescriptor(mode=CUDNN_CONVOLUTION)
 
-x = reshape(Float64[1:9],3,3,1,1); tx = CudaArray(x)
-w = reshape(Float64[1:4],2,2,1,1); tw = CudaArray(w)
-@show size(x) #3x3
-@show size(w) #2x2
-println("x:")
+# x = reshape(Float64[1:9],3,3,1,1); tx = CudaArray(x)
+# w = reshape(Float64[1:4],2,2,1,1); tw = CudaArray(w)
+pads = (0,0); strides = (2,2)
+corrd = ConvolutionDescriptor(padding=pads, stride=strides, mode=CUDNN_CROSS_CORRELATION)
+x = float64(rand(1:10,5,5,1,1)); tx = CudaArray(x)
+w = float64(rand(1:10,2,2,1,1)); tw = CudaArray(w)
+@show size(x)
+@show size(w)
+@show pads
+@show strides
+ty = cudnnConvolutionForward(tx, tw;convDesc=corrd); y = to_host(ty)
+@show size(y)
+dy = float64(rand(1:10,size(ty))); tdy = CudaArray(dy)
+# dy = reshape(Float64[5 6 7 8],2,2,1,1); tdy = CudaArray(dy) #2x2
 println(x)
-println("w:")
 println(w)
-println("conv y:")
-println(to_host(cudnnConvolutionForward(tx, tw;convDesc=convd)))
-println("corr y:")
-println(to_host(cudnnConvolutionForward(tx, tw;convDesc=corrd)))
-println()
-
-#dy = rand(size(ty)); tdy = CudaArray(dy) #2x2
-dy = reshape(Float64[5 6 7 8],2,2,1,1); tdy = CudaArray(dy) #2x2
-@show size(dy)
 println("dy:")
 println(dy)
-dx = zeros(x); tdx = CudaArray(dx) #3x3
-dw = zeros(w); tdw = CudaArray(dw) #2x2
+dx = zeros(x); tdx = CudaArray(dx)
+dw = zeros(w); tdw = CudaArray(dw)
 
-println("conv dw:")
-cudnnConvolutionBackwardFilter(tx, tdy, tdw; convDesc=convd)
-println(to_host(tdw))
 println("corr dw:")
 cudnnConvolutionBackwardFilter(tx, tdy, tdw; convDesc=corrd)
 println(to_host(tdw))
-println("conv dx:")
-cudnnConvolutionBackwardData(tw, tdy, tdx; convDesc=convd)
-println(to_host(tdx))
 println("corr dx:")
 cudnnConvolutionBackwardData(tw, tdy, tdx; convDesc=corrd)
 println(to_host(tdx))
@@ -52,7 +43,9 @@ y = zeros(ydims); ty = CudaArray(y)
 cudnnPoolingForward(pd1, tx, ty)
 println(to_host(ty))
 dy = reshape(Float64[5 3 2 6],2,2,1,1); tdy = CudaArray(dy)
+println("dy:")
+println(dy)
 dx = zeros(x); tdx = CudaArray(dx)
 cudnnPoolingBackward(pd1,ty,tdy,tx,tdx)
+println("dx:")
 println(to_host(tdx))
-println(to_host(ty))

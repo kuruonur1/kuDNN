@@ -57,13 +57,15 @@ int main(int argc, char *argv[]){
         N=28; C=3; H=40; W=80; // src
         K=5; Hw=8; Ww=7; // flt
         */
-        N=128; C=3; H=640; W=480; // src
+        N=128; C=3; H=40; W=80; // src
         K=5; Hw=18; Ww=17; // flt
     }
 
+    int convHpad=0, convWpad=0, convHSt=1, convWSt=1;
+
     assert(H>=Hw); assert(W>=Ww);
     srand(time(NULL));
-    const int Hy=H-Hw+1, Wy=W-Ww+1; // dst 
+    const int Hy=1+(H+2*convHpad-Hw)/convHSt, Wy=1+(W+2*convWpad-Ww)/convWSt; // dst 
     double xData[N*C*H*W]; fillRandom(xData,N*C*H*W);
     double wData[K*C*Hw*Hw]; fillRandom(wData, K*C*Hw*Ww);
     double dyData[N*K*Hy*Wy]; fillRandom(dyData, N*K*Hy*Wy);
@@ -85,20 +87,18 @@ int main(int argc, char *argv[]){
         printf("\n");
     }
 
-    
-
     double *x_h = &xData[0], *w_h = &wData[0], *dy_h=&dyData[0]; // given
     double dx_h[N*C*H*W], dw_h[C*K*Hw*Ww], y_h[N*K*Hy*Wy], db_h[1*K*1*1]; // compute cudnn
     double dx1_h[N*C*H*W], dw1_h[K*C*Hw*Ww], y1_h[N*K*Hy*Wy], db1_h[1*K*1*1]; // compute kunet
     double *x_d=NULL, *dx_d, *w_d, *dw_d, *y_d, *dy_d, *db_d; // gpu pointers
 
-    gpuErrchk( cudaMalloc(&x_d, sizeof(double)*(N*C*H*W)) );
-    gpuErrchk( cudaMalloc(&dx_d, sizeof(double)*N*C*H*W) );
-    gpuErrchk( cudaMalloc(&w_d, sizeof(double)*K*C*Hw*Ww) );
-    gpuErrchk( cudaMalloc(&dw_d, sizeof(double)*K*C*Hw*Ww) );
-    gpuErrchk( cudaMalloc(&y_d, sizeof(double)*N*K*Hy*Wy) );
-    gpuErrchk( cudaMalloc(&dy_d, sizeof(double)*N*K*Hy*Wy) );
-    gpuErrchk( cudaMalloc(&db_d, sizeof(double)*1*K*1*1) );
+    gpuErrchk( cudaMalloc(&x_d,     sizeof(double)*N*C*H*W) );
+    gpuErrchk( cudaMalloc(&dx_d,    sizeof(double)*N*C*H*W) );
+    gpuErrchk( cudaMalloc(&w_d,     sizeof(double)*K*C*Hw*Ww) );
+    gpuErrchk( cudaMalloc(&dw_d,    sizeof(double)*K*C*Hw*Ww) );
+    gpuErrchk( cudaMalloc(&y_d,     sizeof(double)*N*K*Hy*Wy) );
+    gpuErrchk( cudaMalloc(&dy_d,    sizeof(double)*N*K*Hy*Wy) );
+    gpuErrchk( cudaMalloc(&db_d,    sizeof(double)*1*K*1*1) );
 
 
     // send x, w, dy to GPU
@@ -120,6 +120,7 @@ int main(int argc, char *argv[]){
     cudnnFilterDescriptor_t         dwDesc = NULL;
     cudnnConvolutionDescriptor_t    xcorr00Desc = NULL;
     cudnnConvolutionDescriptor_t    conv00Desc = NULL;
+    cudnnConvolutionDescriptor_t    xcorrppDesc = NULL;
 
 
     // creation
@@ -132,6 +133,7 @@ int main(int argc, char *argv[]){
     cudnnErrchk( cudnnCreateFilterDescriptor(       &wDesc) );
     cudnnErrchk( cudnnCreateFilterDescriptor(       &dwDesc) );
     cudnnErrchk( cudnnCreateConvolutionDescriptor(  &xcorr00Desc) );
+    cudnnErrchk( cudnnCreateConvolutionDescriptor(  &xcorrppDesc) );
     cudnnErrchk( cudnnCreateConvolutionDescriptor(  &conv00Desc) );
     // end creation
 
@@ -144,6 +146,7 @@ int main(int argc, char *argv[]){
     cudnnErrchk( cudnnSetTensor4dDescriptor(dyDesc, CUDNN_TENSOR_NCHW, CUDNN_DATA_DOUBLE, N, K, Hy, Wy) );
     cudnnErrchk( cudnnSetTensor4dDescriptor(dbDesc, CUDNN_TENSOR_NCHW, CUDNN_DATA_DOUBLE, 1, K, 1, 1) );
     cudnnErrchk( cudnnSetConvolution2dDescriptor(xcorr00Desc, 0,0,1,1,1,1, CUDNN_CROSS_CORRELATION) );
+    cudnnErrchk( cudnnSetConvolution2dDescriptor(xcorrppDesc, convHpad,convWpad,convHSt,convWSt,1,1, CUDNN_CROSS_CORRELATION) );
     cudnnErrchk( cudnnSetConvolution2dDescriptor(conv00Desc, 0,0,1,1,1,1, CUDNN_CONVOLUTION) );
     // end set input and conf
 
@@ -153,8 +156,9 @@ int main(int argc, char *argv[]){
         tconvDesc = conv00Desc;
         printf("mode: conv00\n");
     }else{
-        tconvDesc = xcorr00Desc;
-        printf("mode: xcorr00\n");
+        // tconvDesc = xcorr00Desc;
+        tconvDesc = xcorrppDesc;
+        printf("mode: xcorrpp\n");
     }
     // end set conv mode
 
@@ -220,18 +224,22 @@ int main(int argc, char *argv[]){
     printf("dx: ok.\n");
     // end backward data test
 
-    /*
     // backward bias test
     printf("\ndb:\n");
+    t0 = getTime();
     cudnnErrchk( cudnnConvolutionBackwardBias(handle, &alpha, dyDesc, dy_d, &beta, dbDesc, db_d) );
+    gpuErrchk( cudaPeekAtLastError() ); gpuErrchk( cudaDeviceSynchronize() );
+    time_elapsed = getTime() - t0; printf("cudnn: %.4f\n",time_elapsed);
     gpuErrchk( cudaMemcpy(db_h, db_d, sizeof(double)*1*K*1*1, cudaMemcpyDeviceToHost) );
+
+    t0 = getTime();
     cudnnErrchk( kunetConvolutionBackwardBias(handle, &alpha, dyDesc, dy_d, &beta, dbDesc, db_d) );
+    time_elapsed = getTime() - t0; printf("kudnn: %.4f\n",time_elapsed);
     gpuErrchk( cudaMemcpy(db1_h, db_d, sizeof(double)*1*K*1*1, cudaMemcpyDeviceToHost) );
     if(VERBOSE){print2Dd(db_h, 1, K); printf("\n");print2Dd(db1_h, 1, K);}
     assert(eqseq(db_h,db1_h,1*K*1*1) < 1.0E-4);
     printf("db: ok.\n\n");
     // end backward bias test
-    */
 
     printf("ok.\n");
 
@@ -244,6 +252,7 @@ int main(int argc, char *argv[]){
     if (dyDesc != NULL) cudnnDestroyTensorDescriptor(dyDesc);
     if (dbDesc != NULL) cudnnDestroyTensorDescriptor(dbDesc);
     if (xcorr00Desc != NULL) cudnnDestroyConvolutionDescriptor(xcorr00Desc);
+    if (xcorrppDesc != NULL) cudnnDestroyConvolutionDescriptor(xcorrppDesc);
     if (conv00Desc != NULL) cudnnDestroyConvolutionDescriptor(conv00Desc);
     if (handle != NULL) cudnnDestroy(handle);
 

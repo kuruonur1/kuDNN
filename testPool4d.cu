@@ -29,8 +29,8 @@ int main(){
     int VERBOSE=0;
     //int PMODE=1; // max
     srand(time(NULL));
-    const int N=128, C=3, H=640, W=480; // src
-    const int K=C, Hd=28, Wd=28; // window
+    const int N=28, C=3, H=40, W=80; // src
+    const int K=C, Hd=8, Wd=8; // window
     const int Hs=Hd, Ws=Hd; // stride
     const int Hp=0, Wp=0; // padding
     assert(H>=Hd); assert(W>=Wd);

@@ -7,7 +7,6 @@
 #include "test.h"
 #include <string.h>
 
-#define prod5d(A)   (A[0]*A[1]*A[2]*A[3]*A[4])
 
 
 int main(int argc, char *argv[]){
@@ -33,19 +32,11 @@ int main(int argc, char *argv[]){
     const int xDims[5] = {N,    C,  28,                     28,                     28};                    // N C H W D
     const int wDims[5] = {K,    C,  2,                     3,                      2};                     // K C Hw Ww Dw
     const int yDims[5] = {N,    K,  xDims[2]-wDims[2]+1,    xDims[3]-wDims[3]+1,    xDims[4]-wDims[4]+1};   // N K  Hy Wy Dy; for stride=1
-    const int xStrides[5] = {   xDims[1]*xDims[2]*xDims[3]*xDims[4],
-                                xDims[2]*xDims[3]*xDims[4],
-                                xDims[3]*xDims[4],
-                                xDims[4],
-                                1};
-    const int yStrides[5] = {   yDims[1]*yDims[2]*yDims[3]*yDims[4],
-                                yDims[2]*yDims[3]*yDims[4],
-                                yDims[3]*yDims[4],
-                                yDims[4],
-                                1};
+    const int xStrides[5] = { dims2strides5d(xDims) };
+    const int yStrides[5] = { dims2strides5d(yDims)  };
     for(ii=2;ii<5;ii++){ assert(xDims[ii]>=wDims[ii]); assert(xDims[ii]>=yDims[ii]);}
 
-    const int convPad[5-2] = {0,0,0};
+    const int convPad[5-2] = {2,2,2};
     const int convStride[5-2] = {1,1,1};
     const int convUpscale[5-2] = {1,1,1};
 
@@ -162,42 +153,43 @@ int main(int argc, char *argv[]){
     gpuErrchk( cudaMemcpy(y_h, y_d, sizeof(double)*N*K*Hy*Wy, cudaMemcpyDeviceToHost) );
     if(VERBOSE){ print2Dd(y_h, Hy, Wy); printf("\n"); print2Dd(y1_h, Hy, Wy);}
     assert(eqseq(y_h,y1_h,N*K*Hy*Wy) < 1.0E-4);
+    */
     printf("y: ok.\n");
     // end forward test
 
     // backward filter test
     printf("\ndw:\n");
-    cudnnErrchk( cudnnConvolutionBackwardFilter(handle, &alpha, xDesc, x_d, dyDesc, dy_d, tconvDesc, &beta, dwDesc, dw_d) );
-    gpuErrchk( cudaMemcpy(dw_h, dw_d, sizeof(double)*K*C*Hw*Ww, cudaMemcpyDeviceToHost) );
+    //cudnnErrchk( cudnnConvolutionBackwardFilter(handle, &alpha, xDesc, x_d, dyDesc, dy_d, tconvDesc, &beta, dwDesc, dw_d) );
+    //gpuErrchk( cudaMemcpy(dw_h, dw_d, sizeof(double)*K*C*Hw*Ww, cudaMemcpyDeviceToHost) );
     cudnnErrchk( kunetConvolutionBackwardFilter(handle, &alpha, xDesc, x_d, dyDesc, dy_d, tconvDesc, &beta, dwDesc, dw_d) );
-    gpuErrchk( cudaMemcpy(dw1_h, dw_d, sizeof(double)*K*C*Hw*Ww, cudaMemcpyDeviceToHost) );
-    if(VERBOSE){ print2Dd(dw_h, Hw, Ww); printf("\n"); print2Dd(dw1_h, Hw, Ww);}
-    assert(eqseq(dw_h,dw1_h,K*C*Hw*Ww) < 1.0E-4);
+    gpuErrchk( cudaMemcpy(dw1_h, dw_d, sizeof(double)*prod5d(wDims), cudaMemcpyDeviceToHost) );
+    /*if(VERBOSE){ print2Dd(dw_h, Hw, Ww); printf("\n"); print2Dd(dw1_h, Hw, Ww);}
+    assert(eqseq(dw_h,dw1_h,K*C*Hw*Ww) < 1.0E-4);*/
     printf("dw: ok.\n");
-    //print2Dd(dw_h, Hw, Ww); printf("\n");
     // end backward filter test
 
     // backward data test
     printf("\ndx:\n");
-    cudnnErrchk( cudnnConvolutionBackwardData(handle, &alpha, wDesc, w_d, dyDesc, dy_d, tconvDesc, &beta, dxDesc, dx_d) );
-    gpuErrchk( cudaMemcpy(dx_h, dx_d, sizeof(double)*N*C*H*W, cudaMemcpyDeviceToHost) );
+    // cudnnErrchk( cudnnConvolutionBackwardData(handle, &alpha, wDesc, w_d, dyDesc, dy_d, tconvDesc, &beta, dxDesc, dx_d) );
+    // gpuErrchk( cudaMemcpy(dx_h, dx_d, sizeof(double)*N*C*H*W, cudaMemcpyDeviceToHost) );
     cudnnErrchk( kunetConvolutionBackwardData(handle, &alpha, wDesc, w_d, dyDesc, dy_d, tconvDesc, &beta, dxDesc, dx_d) );
-    gpuErrchk( cudaMemcpy(dx1_h, dx_d, sizeof(double)*N*C*H*W, cudaMemcpyDeviceToHost) );
-    if(VERBOSE){print2Dd(dx_h, H, W); printf("\n");print2Dd(dx1_h, H, W);}
-    assert(eqseq(dx_h,dx1_h,N*C*H*W) < 1.0E-4);
+    gpuErrchk( cudaMemcpy(dx1_h, dx_d, sizeof(double)*prod5d(xDims), cudaMemcpyDeviceToHost) );
+    // if(VERBOSE){print2Dd(dx_h, H, W); printf("\n");print2Dd(dx1_h, H, W);}
+    // assert(eqseq(dx_h,dx1_h,N*C*H*W) < 1.0E-4);
     printf("dx: ok.\n");
     // end backward data test
 
     // backward bias test
     printf("\ndb:\n");
-    cudnnErrchk( cudnnConvolutionBackwardBias(handle, &alpha, dyDesc, dy_d, &beta, dbDesc, db_d) );
-    gpuErrchk( cudaMemcpy(db_h, db_d, sizeof(double)*1*K*1*1, cudaMemcpyDeviceToHost) );
+    // cudnnErrchk( cudnnConvolutionBackwardBias(handle, &alpha, dyDesc, dy_d, &beta, dbDesc, db_d) );
+    // gpuErrchk( cudaMemcpy(db_h, db_d, sizeof(double)*1*K*1*1, cudaMemcpyDeviceToHost) );
     cudnnErrchk( kunetConvolutionBackwardBias(handle, &alpha, dyDesc, dy_d, &beta, dbDesc, db_d) );
-    gpuErrchk( cudaMemcpy(db1_h, db_d, sizeof(double)*1*K*1*1, cudaMemcpyDeviceToHost) );
-    if(VERBOSE){print2Dd(db_h, 1, K); printf("\n");print2Dd(db1_h, 1, K);}
-    assert(eqseq(db_h,db1_h,1*K*1*1) < 1.0E-4);
+    gpuErrchk( cudaMemcpy(db1_h, db_d, sizeof(double)*yDims[1], cudaMemcpyDeviceToHost) );
+    // if(VERBOSE){print2Dd(db_h, 1, K); printf("\n");print2Dd(db1_h, 1, K);}
+    // assert(eqseq(db_h,db1_h,1*K*1*1) < 1.0E-4);
     printf("db: ok.\n\n");
     // end backward bias test
+    /*
     */
 
     printf("ok.\n");

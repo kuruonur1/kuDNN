@@ -5,93 +5,182 @@
 #include "kudnn.h"
 #include <limits.h>
 
+#define BLK 4096
+#define THR 256
 
-__global__ void krnlXCorr5d(double *src, int N, int C, int H, int W, int D,
-                            double *flt, int Kw, int Cw, int Hf, int Wf, int Df,
-                            double *dst, int Ny, int K, int Hy, int Wy, int Dy,
-                            int hpad, int wpad, int dpad){
-    int i = threadIdx.x, k = threadIdx.y; 
-    int h = blockIdx.x, w = blockIdx.y, d = blockIdx.z;
-    int j,l,m,n;
-    int hsrc, wsrc, dsrc;
 
-    double sum=0;
-    for(j=0;j<C;j++){ 
-        for(l=0; l<Hf;l++){
-        for(m=0; m<Wf;m++){
-        for(n=0; n<Df;n++){
-            hsrc = h+l-hpad; wsrc = w+m-wpad; dsrc = d+n-dpad;
-            if(hsrc >= 0 && wsrc >= 0 &&  dsrc >= 0 &&  hsrc < H && wsrc < W && dsrc < D) 
-                sum += src[ind5d(C,H,W,D,i,j,hsrc,wsrc,dsrc)] * flt[ind5d(C,Hf,Wf,Df,k,j,l,m,n)];
-        }}}
+// CROSS CORRELATION
+__global__ void krnlXCorrY5d(
+        double *src, int N, int C, int H, int W, int D,
+        double *flt, int Kw, int Cw, int Hw, int Ww, int Dw,
+        double *dst, int Ny, int Ky, int Hy, int Wy, int Dy,
+        int NySt, int KySt, int HySt, int WySt, int DySt,
+        int hpad, int wpad, int dpad,
+        const int lim
+        ){ // xcorr(x,w)
+    int i,k,hy,wy,dy, j,l,m,n, g,cumul, hsrc,wsrc,dsrc, hx,wx,dx;
+    
+    for(g = threadIdx.x + blockIdx.x * blockDim.x; g < lim; g += blockDim.x * gridDim.x){
+        cumul=g;
+        i=cumul/NySt; cumul -= i*NySt;
+        k=cumul/KySt; cumul -= k*KySt;
+        hy=cumul/HySt; cumul -= hy*HySt;
+        wy=cumul/WySt; cumul -= wy*WySt;
+        dy=cumul/DySt;
+
+        hx=hy-hpad; wx=wy-wpad; dx=dy-dpad;
+
+        double sum=0;
+        for(j=0;j<C;j++){ 
+            for(l=0; l<Hw;l++){
+            for(m=0; m<Ww;m++){
+            for(n=0; n<Dw;n++){
+                hsrc = hx+l; wsrc = wx+m; dsrc = dx+n;
+                if(hsrc >= 0 && wsrc >= 0 &&  dsrc >= 0 &&  hsrc < H && wsrc < W && dsrc < D) 
+                    sum += src[ind5d(C,H,W,D,i,j,hsrc,wsrc,dsrc)] * flt[ind5d(C,Hw,Ww,Dw,k,j,l,m,n)];
+            }}}
+        }
+        dst[g] = sum;
     }
-    dst[ind5d(K,Hy,Wy,Dy,i,k,h,w,d)] = sum;
+}
+
+__global__ void krnlXCorrDw5d(
+        double* src, int N, int C, int H, int W, int D,
+        double* flt, int Ny, int Ky, int Hy, int Wy, int Dy,
+        double* dst, int Kw, int Cw, int Hw, int Ww, int Dw,
+        int KwSt, int CwSt, int HwSt, int WwSt, int DwSt,
+        int hpad, int wpad, int dpad,
+        const int lim
+        ){
+    // dw = xcorr(x,dy)
+    int i,j,k, l,m,n, g,cumul, hw,ww,dw, hsrc,wsrc,dsrc, hx,wx,dx; // k j
+
+    for(g = threadIdx.x + blockIdx.x * blockDim.x; g < lim; g += blockDim.x * gridDim.x){
+        cumul=g;
+        k=cumul/KwSt; cumul -= k*KwSt;
+        j=cumul/CwSt; cumul -= j*CwSt;
+        hw=cumul/HwSt; cumul -= hw*HwSt;
+        ww=cumul/WwSt; cumul -= ww*WwSt;
+        dw=cumul/DwSt;
+
+        hx=hw-hpad; wx=ww-wpad; dx=dw-dpad;
+
+        double sum=0;
+        for(i=0;i<N;i++){ 
+            for(l=0; l<Hy;l++){
+            for(m=0; m<Wy;m++){
+            for(n=0; n<Dy;n++){
+                hsrc = hx+l; wsrc = wx+m; dsrc = dx+n;
+                if(hsrc >= 0 && wsrc >= 0 &&  dsrc >= 0 &&  hsrc < H && wsrc < W && dsrc < D) 
+                    sum += src[ind5d(C,H,W,D,i,j,hsrc,wsrc,dsrc)] * flt[ind5d(Ky,Hy,Wy,Dy,i,k,l,m,n)];
+            }}}
+        }
+        dst[g] = sum;
+    }
+}
+
+__global__ void krnlXCorrDx5d(
+        double *src, int Ny, int Ky, int Hy, int Wy, int Dy,
+        double *flt, int Kw, int Cw, int Hw, int Ww, int Dw,
+        double *dst, int N, int C, int H, int W, int D,
+        int NSt, int CSt, int HSt, int WSt, int DSt,
+        int hpad, int wpad, int dpad,
+        const int lim
+        ){
+    // dx=conv(dy,w,'full')
+    int i,j,k, l,m,n, g,cumul, h,w,d, hsrc,wsrc,dsrc, hy,wy,dy; // i j
+    // TODO Hw-1-convHPad, Ww-1-convWPad, N*C*H*W);
+    
+    for(g = threadIdx.x + blockIdx.x * blockDim.x; g < lim; g += blockDim.x * gridDim.x){
+        cumul=g;
+        i=cumul/NSt; cumul -= i*NSt;
+        j=cumul/CSt; cumul -= j*CSt;
+        h=cumul/HSt; cumul -= h*HSt;
+        w=cumul/WSt; cumul -= w*WSt;
+        d=cumul/DSt;
+
+        hy=h-hpad; wy=w-wpad; dy=d-dpad;
+
+        double sum=0;
+        for(k=0;k<Ky;k++){
+            for(l=Hw-1; l>=0;l--){
+            for(m=Ww-1; m>=0;m--){
+            for(n=Dw-1; n>=0;n--){
+                hsrc = hy+Hw-1-l; //int hsrc = h+Hf-1-l;
+                wsrc = wy+Ww-1-m;
+                dsrc = dy+Dw-1-n;
+                if(hsrc >= 0 && wsrc >= 0 && dsrc >= 0 && hsrc < Hy && wsrc < Wy && dsrc < Dy) 
+                    sum += src[ind5d(Ky,Hy,Wy,Dy,i,k,hsrc,wsrc,dsrc)] * flt[ind5d(Cw,Hw,Ww,Dw,k,j,l,m,n)];
+            }}}
+        }
+        dst[g] = sum;
+    }
+}
+// end CROSS CORRELATION
+
+__global__ void krnlBackBias5d(
+        double *src, int N, int C, int H, int W, int D, double *dst
+        ){
+    int j = threadIdx.x;
+    int i,k,l,m;
+    double sum=0;
+    for(i=0;i<N;i++) for(k=0;k<H;k++) for(l=0;l<W;l++) for(m=0;m<D;m++) sum += src[ind5d(C,H,W,D,i,j,k,l,m)];
+    dst[j] = sum;
 }
 
 
 cudnnStatus_t CUDNNWINAPI kunetConvolutionForward(        cudnnHandle_t                     handle,
                                                           const void                         *alpha,
                                                           const cudnnTensorDescriptor_t       srcDesc,
-                                                          const void                         *srcData,
+                                                          const void                         *src,
                                                           const cudnnFilterDescriptor_t       filterDesc,
-                                                          const void                         *filterData,
+                                                          const void                         *flt,
                                                           const cudnnConvolutionDescriptor_t  convDesc,
                                                           cudnnConvolutionFwdAlgo_t           algo,
                                                           void                               *workSpace,
                                                           size_t                              workSpaceSizeInBytes,            
                                                           const void                         *beta,
                                                           const cudnnTensorDescriptor_t       destDesc,
-                                                          void                               *destData
+                                                          void                               *dst
                                                  ){
-    cudnnStatus_t status = CUDNN_STATUS_SUCCESS;
-    cudnnDataType_t dataType; // image data type
+    cudnnDataType_t dataType;
     cudnnConvolutionMode_t mode;
+    cudnnStatus_t status = CUDNN_STATUS_SUCCESS;
+
+    int i;
     int ndimsreq=5; int convndimsreq=3;
-
-    int xndims, xDims[ndimsreq], xStrides[ndimsreq];
-    cudnnGetTensorNdDescriptor(srcDesc,  ndimsreq, &dataType, &xndims, xDims, xStrides);
-    assert(dataType == CUDNN_DATA_DOUBLE);
-
     int wndims, wDims[ndimsreq];
+    int xndims, xDims[ndimsreq], xStrides[ndimsreq];
+    int yndims, yDims[ndimsreq], yStrides[ndimsreq];
+    int convndims, convPad[convndimsreq], convStride[convndimsreq], convUpscale[convndimsreq];
+
+    // x
+    cudnnGetTensorNdDescriptor(srcDesc,  ndimsreq, &dataType, &xndims, xDims, xStrides);
+
+    // w
     cudnnGetFilterNdDescriptor(filterDesc, ndimsreq, &dataType, &wndims, wDims);
-    assert(dataType == CUDNN_DATA_DOUBLE);
-    printf("%d %d\n", xndims, wndims);
     assert(xndims == wndims);
 
-    int yndims, yDims[ndimsreq], yStrides[ndimsreq];
+    // y
     cudnnGetTensorNdDescriptor(destDesc,  ndimsreq, &dataType, &yndims, yDims, yStrides);
-    assert(dataType == CUDNN_DATA_DOUBLE);
     assert(xndims == yndims);
 
-    int convndims, convPad[convndimsreq], convStride[convndimsreq], convUpscale[convndimsreq];
     cudnnGetConvolutionNdDescriptor(convDesc, convndimsreq, &convndims, convPad, convStride, convUpscale, &mode);
-    assert(convndims==(xndims-2));
+    assert(convndims==(xndims-2)); for(i=0; i<convndims; i++) assert(convStride[i]==1); for(i=0; i<convndims; i++) assert(convUpscale[i]==1);
 
-    printf("N:%d C:%d H:%d W:%d D:%d\n",        cat5d(xDims));
-    printf("K:%d C:%d Hw:%d Ww:%d Dw:%d\n",     cat5d(wDims));
-    printf("N:%d K:%d Hy:%d Wy:%d Dy:%d\n",     cat5d(yDims));
-    printf("\n");
-
-
-    dim3 threads(   yDims[0],   yDims[1],   1); // N K
-    dim3 grid(      yDims[2],   yDims[3],   yDims[4]); // Hy Wy Dy
     if(mode == CUDNN_CROSS_CORRELATION){
         // xcorr(x,w)
-        krnlXCorr5d<<<grid, threads>>>((double *)srcData, cat5d(xDims),
-                            (double *)filterData, cat5d(wDims),
-                            (double *)destData, cat5d(yDims), convPad[0], convPad[1], convPad[2]);
+        krnlXCorrY5d<<<BLK, THR>>>(
+                (double *)src, cat5d(xDims),
+                (double *)flt, cat5d(wDims),
+                (double *)dst, cat5d(yDims),
+                cat5d(yStrides), cat3d(convPad), prod5d(yDims));
         gpuErrchk( cudaPeekAtLastError() );
         gpuErrchk( cudaDeviceSynchronize() );
 
     }else if(mode == CUDNN_CONVOLUTION){
         // conv(x,w)
         status = CUDNN_STATUS_NOT_SUPPORTED;
-        /*krnlConv4d<<<grid,threads>>>((double *)srcData, N, C, H, W,
-                                    (double *)filterData, Hf, Wf, K,
-                                    (double *)destData, Ho, Wo, pad_h, pad_w);
-        gpuErrchk( cudaPeekAtLastError() );
-        gpuErrchk( cudaDeviceSynchronize() );*/
-        //status = CUDNN_STATUS_NOT_SUPPORTED;
     }else{
         status = CUDNN_STATUS_BAD_PARAM;
     }
@@ -101,30 +190,111 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionForward(        cudnnHandle_t         
 cudnnStatus_t CUDNNWINAPI kunetConvolutionBackwardFilter( cudnnHandle_t                       handle,
                                                           const void                         *alpha,
                                                           const cudnnTensorDescriptor_t       srcDesc,
-                                                          const void                         *srcData,
+                                                          const void                         *src,
                                                           const cudnnTensorDescriptor_t       diffDesc,
-                                                          const void                         *diffData,
+                                                          const void                         *dff,
                                                           const cudnnConvolutionDescriptor_t  convDesc,
                                                           const void                         *beta,
                                                           const cudnnFilterDescriptor_t       gradDesc,
-                                                          void                               *gradData
+                                                          void                               *grd
                                                         ){
-    return CUDNN_STATUS_NOT_SUPPORTED;
+    // dw = xcorr(x,dy)
+    cudnnDataType_t dataType;
+    cudnnConvolutionMode_t mode;
+    cudnnStatus_t status = CUDNN_STATUS_SUCCESS;
+
+    int i;
+    int ndimsreq=5; int convndimsreq=3;
+    int dwndims, dwDims[ndimsreq];
+    int xndims, xDims[ndimsreq], xStrides[ndimsreq];
+    int dyndims, dyDims[ndimsreq], dyStrides[ndimsreq];
+    int convndims, convPad[convndimsreq], convStride[convndimsreq], convUpscale[convndimsreq];
+
+    // x
+    cudnnGetTensorNdDescriptor(srcDesc,  ndimsreq, &dataType, &xndims, xDims, xStrides);
+
+    // dy
+    cudnnGetTensorNdDescriptor(diffDesc,  ndimsreq, &dataType, &dyndims, dyDims, dyStrides);
+    assert(xndims == dyndims);
+
+    // dw
+    cudnnGetFilterNdDescriptor(gradDesc, ndimsreq, &dataType, &dwndims, dwDims);
+    assert(xndims == dwndims);
+
+    cudnnGetConvolutionNdDescriptor(convDesc, convndimsreq, &convndims, convPad, convStride, convUpscale, &mode);
+    assert(convndims==(xndims-2)); for(i=0; i<convndims; i++) assert(convStride[i]==1); for(i=0; i<convndims; i++) assert(convUpscale[i]==1);
+
+    if(mode == CUDNN_CROSS_CORRELATION){
+        // dw = xcorr(x,dy)
+        krnlXCorrDw5d<<<BLK, THR>>>(
+                (double *)src, cat5d(xDims),
+                (double *)dff, cat5d(dyDims),
+                (double *)grd, cat5d(dwDims),
+                dims2strides5d(dwDims), cat3d(convPad), prod5d(dwDims));
+        gpuErrchk( cudaPeekAtLastError() );
+        gpuErrchk( cudaDeviceSynchronize() );
+
+    }else if(mode == CUDNN_CONVOLUTION){
+        status = CUDNN_STATUS_NOT_SUPPORTED;
+    }else{
+        status = CUDNN_STATUS_BAD_PARAM;
+    }
+    return status;
 }
 
 cudnnStatus_t CUDNNWINAPI kunetConvolutionBackwardData(  cudnnHandle_t                       handle,
                                                          const void                         *alpha,
                                                          const cudnnFilterDescriptor_t       filterDesc,
-                                                         const void                         *filterData,
+                                                         const void                         *flt,
                                                          const cudnnTensorDescriptor_t       diffDesc,
-                                                         const void                         *diffData,
+                                                         const void                         *dff,
                                                          const cudnnConvolutionDescriptor_t  convDesc,
                                                          const void                         *beta,
                                                          const cudnnTensorDescriptor_t       gradDesc,
-                                                         void                               *gradData
+                                                         void                               *grd
                                                        ){
 
-    return CUDNN_STATUS_NOT_SUPPORTED;
+    // conv(dy,w,'full');
+    cudnnDataType_t dataType;
+    cudnnConvolutionMode_t mode;
+    cudnnStatus_t status = CUDNN_STATUS_SUCCESS;
+
+    int i;
+    int ndimsreq=5; int convndimsreq=3;
+    int dyndims, dyDims[ndimsreq], dyStrides[ndimsreq];
+    int wndims, wDims[ndimsreq];
+    int dxndims, dxDims[ndimsreq], dxStrides[ndimsreq];
+    int convndims, convPad[convndimsreq], convStride[convndimsreq], convUpscale[convndimsreq];
+
+    // dy
+    cudnnGetTensorNdDescriptor(diffDesc,  ndimsreq, &dataType, &dyndims, dyDims, dyStrides);
+
+    // w
+    cudnnGetFilterNdDescriptor(filterDesc, ndimsreq, &dataType, &wndims, wDims);
+
+    // dx
+    cudnnGetTensorNdDescriptor(gradDesc,  ndimsreq, &dataType, &dxndims, dxDims, dxStrides);
+    assert(dxndims == dyndims); assert(dxndims == wndims);
+
+    cudnnGetConvolutionNdDescriptor(convDesc, convndimsreq, &convndims, convPad, convStride, convUpscale, &mode);
+    assert(convndims==(dxndims-2)); for(i=0; i<convndims; i++) assert(convStride[i]==1); for(i=0; i<convndims; i++) assert(convUpscale[i]==1);
+
+    if(mode == CUDNN_CROSS_CORRELATION){
+        // conv(dy,w,'full');
+        krnlXCorrDx5d<<<BLK, THR>>>(
+                (double *)dff, cat5d(dyDims),
+                (double *)flt, cat5d(wDims),
+                (double *)grd, cat5d(dxDims),
+                cat5d(dxStrides), cat3d(convPad), prod5d(dxDims));
+        gpuErrchk( cudaPeekAtLastError() );
+        gpuErrchk( cudaDeviceSynchronize() );
+
+    }else if(mode == CUDNN_CONVOLUTION){
+        status = CUDNN_STATUS_NOT_SUPPORTED;
+    }else{
+        status = CUDNN_STATUS_BAD_PARAM;
+    }
+    return status;
 }
 
 cudnnStatus_t CUDNNWINAPI kunetConvolutionBackwardBias(   cudnnHandle_t                   handle,
@@ -135,7 +305,26 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionBackwardBias(   cudnnHandle_t         
                                                           const cudnnTensorDescriptor_t   destDesc,
                                                           void                           *destData
                                                       ){
-    return CUDNN_STATUS_NOT_SUPPORTED;
+    // dy -> db : N,K,Hy,Wy,Dy -> 1,K,1,1,1
+    cudnnDataType_t dataType;
+    cudnnStatus_t status = CUDNN_STATUS_SUCCESS;
+
+    int ndimsreq=5;
+    int dyndims, dyDims[ndimsreq], dyStrides[ndimsreq];
+
+    // dy
+    cudnnGetTensorNdDescriptor(srcDesc,  ndimsreq, &dataType, &dyndims, dyDims, dyStrides);
+
+    dim3 threads(dyDims[1], 1, 1); 
+    dim3 grid(1,1,1);
+    krnlBackBias5d<<<grid,threads>>>(
+            (double *)srcData, 
+            cat5d(dyDims),
+            (double *)destData
+            );
+    gpuErrchk( cudaPeekAtLastError() );
+    gpuErrchk( cudaDeviceSynchronize() );
+    return status;
 }
 
 cudnnStatus_t CUDNNWINAPI kunetPoolingForward(  cudnnHandle_t handle,
