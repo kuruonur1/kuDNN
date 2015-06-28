@@ -3,13 +3,92 @@
 #include <assert.h>
 #include <math.h>
 #include "kudnn.h"
-#include <limits.h>
+#include <float.h>
 
 #define BLK 4096
 #define THR 256
 
+// POOLING
+
+__global__ void krnlMaxPool5d(  
+        double *src,
+        int N, int C, int H, int W, int D,
+        int Hd, int Wd, int Dd,
+        int Hs, int Ws, int Ds,
+        double *dst,
+        int Ny, int Ky, int Hy, int Wy, int Dy,
+        int NySt, int KySt, int HySt, int WySt, int DySt,
+        const int lim
+        ){
+    int i,j,l,m,n, g,cumul, hy,wy,dy,hx,wx,dx,hsrc,wsrc,dsrc;
+    double maxm;
+    
+    for(g = threadIdx.x + blockIdx.x * blockDim.x; g < lim; g += blockDim.x * gridDim.x){
+        cumul=g;
+        i=cumul/NySt; cumul -= i*NySt;
+        j=cumul/KySt; cumul -= j*KySt;
+        hy=cumul/HySt; cumul -= hy*HySt;
+        wy=cumul/WySt; cumul -= wy*WySt;
+        dy=cumul/DySt;
+
+        hx = hy*Hs; wx = wy*Ws; dx= dy*Ds;
+        maxm = DBL_MIN;
+        for(l=0; l<Hd;l++){
+        for(m=0; m<Wd;m++){
+        for(n=0; n<Dd;n++){
+            hsrc = hx+l; wsrc = wx+m; dsrc = dx+n;
+            if(hsrc >= 0 && wsrc >= 0 && dsrc >=0 && hsrc < H && wsrc < W && dsrc < D) 
+                if(src[ind5d(C,H,W,D,i,j,hsrc,wsrc,dsrc)] > maxm)
+                    maxm = src[ind5d(C,H,W,D,i,j,hsrc,wsrc,dsrc)];
+        }}}
+        dst[g] = maxm; 
+    }
+}
+
+__global__ void krnlMaxPool5dDx( 
+        double *y, int Ny, int Ky, int Hy, int Wy, int Dy,
+        double *diffy,
+        double *x,  int N, int C, int H, int W, int D,
+        double *diffx,
+        int Hd, int Wd, int Dd,
+        int Hs, int Ws, int Ds,
+        int NySt, int CySt, int HySt, int WySt, int DySt,
+        const int lim
+        ){
+    int i,j,l,m,n, g,cumul, hy,wy,dy,hx,wx,dx, hsrc,wsrc,dsrc, maxmhx,maxmwx,maxmdx;
+    double maxm;
+
+    for(g = threadIdx.x + blockIdx.x * blockDim.x; g < lim; g += blockDim.x * gridDim.x){
+        cumul=g;
+        i=cumul/NySt; cumul -= i*NySt;
+        j=cumul/CySt; cumul -= j*CySt;
+        hy=cumul/HySt; cumul -= hy*HySt;
+        wy=cumul/WySt; cumul -= wy*WySt;
+        dy=cumul/DySt;
+
+        maxmhx = hx = hy*Hs; maxmwx = wx = wy*Ws; maxmdx = dx = dy*Ds;
+        maxm = DBL_MIN;
+
+        for(l=0; l<Hd;l++){
+        for(m=0; m<Wd;m++){
+        for(n=0; n<Dd;n++){
+            hsrc = hx+l; wsrc = wx+m; dsrc = dx+n;
+            if(hsrc >= 0 && wsrc >= 0 && dsrc >=0 && hsrc < H && wsrc < W && dsrc < D){
+                if(x[ind5d(C,H,W,D,i,j,hsrc,wsrc,dsrc)] > maxm){
+                    maxm = x[ind5d(C,H,W,D,i,j,hsrc,wsrc,dsrc)]; // update maxm
+                    maxmhx = hsrc; maxmwx = wsrc; maxmdx = dsrc; // update indexes of maxm
+                }
+            }
+        }}}
+        diffx[ind5d(C,H,W,D,i,j,maxmhx,maxmwx,maxmdx)] = diffy[ind5d(C,Hy,Wy,Dy,i,j,hy,wy,dy)];
+    }
+}
+
+// end POOLING
+
 
 // CROSS CORRELATION
+
 __global__ void krnlXCorrY5d(
         double *src, int N, int C, int H, int W, int D,
         double *flt, int Kw, int Cw, int Hw, int Ww, int Dw,
@@ -89,7 +168,8 @@ __global__ void krnlXCorrDx5d(
         ){
     // dx=conv(dy,w,'full')
     int i,j,k, l,m,n, g,cumul, h,w,d, hsrc,wsrc,dsrc, hy,wy,dy; // i j
-    // TODO Hw-1-convHPad, Ww-1-convWPad, N*C*H*W);
+
+    hpad = Hw-1-hpad; wpad = Ww-1-wpad; dpad = Dw-1-dpad; // full convolution
     
     for(g = threadIdx.x + blockIdx.x * blockDim.x; g < lim; g += blockDim.x * gridDim.x){
         cumul=g;
@@ -116,6 +196,7 @@ __global__ void krnlXCorrDx5d(
         dst[g] = sum;
     }
 }
+
 // end CROSS CORRELATION
 
 __global__ void krnlBackBias5d(
@@ -331,12 +412,48 @@ cudnnStatus_t CUDNNWINAPI kunetPoolingForward(  cudnnHandle_t handle,
                                                 const cudnnPoolingDescriptor_t   poolingDesc,
                                                 const void                      *alpha,
                                                 const cudnnTensorDescriptor_t    srcDesc,
-                                                const void                      *srcData,
+                                                const void                      *src,
                                                 const void                      *beta,
                                                 const cudnnTensorDescriptor_t    destDesc,
-                                                void                            *destData
+                                                void                            *dst
                                              ){
-    return CUDNN_STATUS_NOT_SUPPORTED;
+    cudnnPoolingMode_t mode;
+    cudnnDataType_t dataType;
+    cudnnStatus_t status = CUDNN_STATUS_SUCCESS;
+
+    int i;
+    int ndimsreq=5, poolndimsreq=3, poolndims;
+    int xndims, xDims[ndimsreq], xStrides[ndimsreq];
+    int yndims, yDims[ndimsreq], yStrides[ndimsreq];
+    int poolDims[poolndimsreq], poolPad[poolndimsreq], poolStride[poolndimsreq];
+
+    // x
+    cudnnGetTensorNdDescriptor(srcDesc,  ndimsreq, &dataType, &xndims, xDims, xStrides);
+
+    // y
+    cudnnGetTensorNdDescriptor(destDesc,  ndimsreq, &dataType, &yndims, yDims, yStrides);
+    assert(xndims == yndims);
+
+    cudnnGetPoolingNdDescriptor(poolingDesc, poolndimsreq, &mode, &poolndims, poolDims, poolPad, poolStride);
+    for(i=0;i<poolndims;i++) assert(poolDims[i]>=poolStride[i]);
+
+    if(mode == CUDNN_POOLING_MAX){
+            krnlMaxPool5d<<<BLK,THR>>>(  
+                    (double *)src,
+                    cat5d(xDims),
+                    cat3d(poolDims),
+                    cat3d(poolStride),
+                    (double *)dst,
+                    cat5d(yDims),
+                    cat5d(yStrides),
+                    prod5d(yDims)
+                    );
+            gpuErrchk( cudaPeekAtLastError() );
+            gpuErrchk( cudaDeviceSynchronize() );
+    }else{
+        status = CUDNN_STATUS_NOT_SUPPORTED;
+    }
+    return status;
 }
 
 cudnnStatus_t CUDNNWINAPI kunetPoolingBackward( cudnnHandle_t                   handle,
@@ -352,5 +469,51 @@ cudnnStatus_t CUDNNWINAPI kunetPoolingBackward( cudnnHandle_t                   
                                                 const cudnnTensorDescriptor_t   destDiffDesc,
                                                 void                           *destDiffData
                                               ){
-    return CUDNN_STATUS_NOT_SUPPORTED;
+    cudnnPoolingMode_t mode;
+    cudnnDataType_t dataType;
+    cudnnStatus_t status = CUDNN_STATUS_SUCCESS;
+
+    int i;
+    int ndimsreq=5, poolndimsreq=3, poolndims;
+    int xndims, xDims[ndimsreq], xStrides[ndimsreq];
+    int dxndims, dxDims[ndimsreq], dxStrides[ndimsreq];
+    int yndims, yDims[ndimsreq], yStrides[ndimsreq];
+    int dyndims, dyDims[ndimsreq], dyStrides[ndimsreq];
+    int poolDims[poolndimsreq], poolPad[poolndimsreq], poolStride[poolndimsreq];
+
+    // y
+    cudnnGetTensorNdDescriptor(srcDesc,  ndimsreq, &dataType, &yndims, yDims, yStrides);
+
+    // dy
+    cudnnGetTensorNdDescriptor(srcDiffDesc,  ndimsreq, &dataType, &dyndims, dyDims, dyStrides);
+
+    // x
+    cudnnGetTensorNdDescriptor(destDesc,  ndimsreq, &dataType, &xndims, xDims, xStrides);
+
+    // dx
+    cudnnGetTensorNdDescriptor(destDiffDesc,  ndimsreq, &dataType, &dxndims, dxDims, dxStrides);
+
+    cudnnGetPoolingNdDescriptor(poolingDesc, poolndimsreq, &mode, &poolndims, poolDims, poolPad, poolStride);
+    for(i=0;i<poolndims;i++) assert(poolDims[i]>=poolStride[i]);
+
+    if(mode == CUDNN_POOLING_MAX){
+        krnlMaxPool5dDx<<<BLK,THR>>>( 
+                (double *)srcData,
+                cat5d(yDims),
+                (double *)srcDiffData,
+                (double *)destData,
+                cat5d(xDims),
+                (double *)destDiffData,
+                cat3d(poolDims),
+                cat3d(poolStride),
+                cat5d(yStrides),
+                prod5d(yDims)
+                );
+        gpuErrchk( cudaPeekAtLastError() );
+        gpuErrchk( cudaDeviceSynchronize() );
+    }else{
+        status = CUDNN_STATUS_NOT_SUPPORTED;
+    }
+
+    return status;
 }

@@ -8,6 +8,14 @@
 #include <string.h>
 
 
+void testXcorr(
+        int dims,
+        int N, int C, int H, int W, int D,
+        int K, int Hw, int Ww, int Dw,
+        int convHPad, int convWPad, int convDPad
+        ){
+}
+
 void testPooling(){
     const int xDims[5] = {1,1,28,28,28}; // N C H W D
 
@@ -26,10 +34,8 @@ void testPooling(){
     const int xStrides[5] = { dims2strides5d(xDims) };
     const int yStrides[5] = { dims2strides5d(yDims)  };
 
-    // random data
     double xData[prod5d(xDims)]; fillRandom(xData,prod5d(xDims));
     double dyData[prod5d(yDims)]; fillRandom(dyData,prod5d(yDims));
-    // end random data
 
     double *x_h = &xData[0], *dy_h = &dyData[0]; // given
     double y_h[prod5d(yDims)], dx_h[prod5d(xDims)]; // compute cudnn
@@ -51,56 +57,47 @@ void testPooling(){
     cudnnTensorDescriptor_t         dxDesc = NULL;
     cudnnTensorDescriptor_t         yDesc = NULL;
     cudnnTensorDescriptor_t         dyDesc = NULL;
-    cudnnPoolingDescriptor_t        poolDesc = NULL;
+    cudnnPoolingDescriptor_t        maxPoolDesc = NULL;
 
-    // create
+    // creation
     cudnnErrchk( cudnnCreate(                       &handle) );
     cudnnErrchk( cudnnCreateTensorDescriptor(       &xDesc) );
     cudnnErrchk( cudnnCreateTensorDescriptor(       &dxDesc) );
     cudnnErrchk( cudnnCreateTensorDescriptor(       &yDesc) );
     cudnnErrchk( cudnnCreateTensorDescriptor(       &dyDesc) );
-    cudnnErrchk( cudnnCreatePoolingDescriptor(      &poolDesc) );
-    // end create
+    cudnnErrchk( cudnnCreatePoolingDescriptor(      &maxPool00Desc) );
+    // end creation
 
     // set
     cudnnErrchk( cudnnSetTensorNdDescriptor(xDesc, CUDNN_DATA_DOUBLE, 5, xDims, xStrides) );
     cudnnErrchk( cudnnSetTensorNdDescriptor(dxDesc, CUDNN_DATA_DOUBLE, 5, xDims, xStrides) );
     cudnnErrchk( cudnnSetTensorNdDescriptor(yDesc, CUDNN_DATA_DOUBLE, 5, yDims, yStrides) );
     cudnnErrchk( cudnnSetTensorNdDescriptor(dyDesc, CUDNN_DATA_DOUBLE, 5, yDims, yStrides) );
-    cudnnErrchk( cudnnSetPoolingNdDescriptor(poolDesc, CUDNN_POOLING_MAX, 5-2, poolDims, poolPad, poolStride) );
-    // end set
-
-    // forward test
-    double alpha=1, beta=1;
-    printf("y:\n");
-    cudnnErrchk( kunetPoolingForward(handle, poolDesc, &alpha, xDesc, x_d, &beta, yDesc, y_d) );
-    gpuErrchk( cudaMemcpy(y1_h, y_d, sizeof(double)*prod5d(yDims), cudaMemcpyDeviceToHost) );
-    printf("y: ok.\n\n");
-    // end forward test 
-
-    // backward test
-    printf("dx:\n");
-    cudnnErrchk( kunetPoolingBackward(handle, poolDesc, &alpha, yDesc, y_d, dyDesc, dy_d, xDesc, x_d, &beta, dxDesc, dx_d) );
-    gpuErrchk( cudaMemcpy(dx_h, dx_d, sizeof(double)*prod5d(xDims), cudaMemcpyDeviceToHost) );
-    printf("dx:ok\n");
-    // end backward test
-
-    // destroy
-    if (xDesc != NULL) cudnnDestroyTensorDescriptor(xDesc);
-    if (dxDesc != NULL) cudnnDestroyTensorDescriptor(dxDesc);
-    if (dyDesc != NULL) cudnnDestroyTensorDescriptor(dyDesc);
-    if (poolDesc != NULL) cudnnDestroyPoolingDescriptor(poolDesc);
-    if (handle != NULL) cudnnDestroy(handle);
-    // end destroy
-
-    // free
-    cudaFree(x_d); cudaFree(y_d);
-    cudaFree(dx_d); cudaFree(dy_d);
-    // end free
+    cudnnErrchk( cudnnSetPoolingNdDescriptor(maxPoolDesc, CUDNN_POOLING_MAX, 5-2, poolDims, poolPad, poolStride) );
+    // end set input and conf
+}
+void poolingOutputDims(
+        const int xDims[],
+        const int poolDims[],
+        const int poolPad[],
+        const int poolStride[],
+        int yDims[]){
 }
 
-void testXcorr(){
-    int CONV=0;
+int main(int argc, char *argv[]){
+    int CONV;
+    if(argc==2){
+        if(!strcmp(argv[1], "conv"))
+            CONV=1;
+        else if(!strcmp(argv[1],"xcorr"))
+            CONV=0;
+        else
+            exit(-1);
+    }else{
+        printf("usage: ./testConv4d <mode>\n");
+        exit(-1);
+    }
+    srand(time(NULL));
     int ii=0; 
     int VERBOSE=0;
     const int N=100, C=3, K=10;
@@ -290,22 +287,6 @@ void testXcorr(){
     // free
     cudaFree(x_d); cudaFree(dx_d); cudaFree(w_d); cudaFree(dw_d); cudaFree(y_d); cudaFree(dy_d); cudaFree(db_d);
     // END TESTS
-}
-
-int main(){
-    srand(time(NULL));
-    testPooling();
-    /*if(argc==2){
-        if(!strcmp(argv[1], "conv"))
-            CONV=1;
-        else if(!strcmp(argv[1],"xcorr"))
-            CONV=0;
-        else
-            exit(-1);
-    }else{
-        printf("usage: ./testConv4d <mode>\n");
-        exit(-1);
-    }*/
     return 0;
 }
 

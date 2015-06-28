@@ -26,12 +26,12 @@ double getTime()
 
 
 int main(){
-    int VERBOSE=0;
-    //int PMODE=1; // max
+    int VERBOSE=1;
     srand(time(NULL));
-    const int N=28, C=3, H=40, W=80; // src
-    const int K=C, Hd=8, Wd=8; // window
-    const int Hs=Hd, Ws=Hd; // stride
+    const int N=1, C=1, H=6, W=6; // src
+    const int K=C, Hd=3, Wd=3; // window
+    // const int Hs=Hd, Ws=Hd; // stride
+     const int Hs=2, Ws=2; // stride
     const int Hp=0, Wp=0; // padding
     assert(H>=Hd); assert(W>=Wd);
     const int Hy=1+ceil((H+2*Hp-Hd)/(double)Hs), Wy=1+ceil((W+2*Wp-Wd)/(double)Ws); // dst 
@@ -68,6 +68,9 @@ int main(){
     gpuErrchk( cudaMemcpy(x_d, x_h, sizeof(double)*N*C*H*W, cudaMemcpyHostToDevice) );
     gpuErrchk( cudaMemcpy(dy_d, dy_h, sizeof(double)*N*K*Hy*Wy, cudaMemcpyHostToDevice) );
     // end send x, dy to GPU
+
+    //gpuErrchk( cudaMemset(y_d, 0, sizeof(double)*N*K*Hy*Wy) );
+    //print2Dd(y_h, Hy, Wy);
     
     /**
       CUDNN KUNET COMPARISON TESTS
