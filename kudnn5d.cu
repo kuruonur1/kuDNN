@@ -10,7 +10,7 @@
 
 // POOLING
 
-__global__ void krnlMaxPool5d(  
+__global__ void krnlMaxPoolY5d(  
         double *src,
         int N, int C, int H, int W, int D,
         int Hd, int Wd, int Dd,
@@ -249,6 +249,12 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionForward(        cudnnHandle_t         
     cudnnGetConvolutionNdDescriptor(convDesc, convndimsreq, &convndims, convPad, convStride, convUpscale, &mode);
     assert(convndims==(xndims-2)); for(i=0; i<convndims; i++) assert(convStride[i]==1); for(i=0; i<convndims; i++) assert(convUpscale[i]==1);
 
+    if(xndims == 4){ // 4-D
+        xDims[4] = 1; wDims[4] = 1; yDims[4] = 1; 
+        xStrides[4]=1; yStrides[4]=1;
+        convPad[2] = 0; convStride[2] = 0; convUpscale[2] = 0;
+    }
+
     if(mode == CUDNN_CROSS_CORRELATION){
         // xcorr(x,w)
         krnlXCorrY5d<<<BLK, THR>>>(
@@ -305,6 +311,12 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionBackwardFilter( cudnnHandle_t         
     cudnnGetConvolutionNdDescriptor(convDesc, convndimsreq, &convndims, convPad, convStride, convUpscale, &mode);
     assert(convndims==(xndims-2)); for(i=0; i<convndims; i++) assert(convStride[i]==1); for(i=0; i<convndims; i++) assert(convUpscale[i]==1);
 
+    if(xndims == 4){ // 4-D
+        xDims[4] = 1; dwDims[4] = 1; dyDims[4] = 1; 
+        xStrides[4]=1; dyStrides[4]=1;
+        convPad[2] = 0; convStride[2] = 0; convUpscale[2] = 0;
+    }
+
     if(mode == CUDNN_CROSS_CORRELATION){
         // dw = xcorr(x,dy)
         krnlXCorrDw5d<<<BLK, THR>>>(
@@ -360,6 +372,12 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionBackwardData(  cudnnHandle_t          
     cudnnGetConvolutionNdDescriptor(convDesc, convndimsreq, &convndims, convPad, convStride, convUpscale, &mode);
     assert(convndims==(dxndims-2)); for(i=0; i<convndims; i++) assert(convStride[i]==1); for(i=0; i<convndims; i++) assert(convUpscale[i]==1);
 
+    if(dxndims == 4){ // 4-D
+        dxDims[4] = 1; wDims[4] = 1; dyDims[4] = 1; 
+        dxStrides[4]=1; dyStrides[4]=1;
+        convPad[2] = 0; convStride[2] = 0; convUpscale[2] = 0;
+    }
+
     if(mode == CUDNN_CROSS_CORRELATION){
         // conv(dy,w,'full');
         krnlXCorrDx5d<<<BLK, THR>>>(
@@ -395,6 +413,11 @@ cudnnStatus_t CUDNNWINAPI kunetConvolutionBackwardBias(   cudnnHandle_t         
 
     // dy
     cudnnGetTensorNdDescriptor(srcDesc,  ndimsreq, &dataType, &dyndims, dyDims, dyStrides);
+
+    if(dyndims == 4){ // 4-D
+        dyDims[4] = 1; 
+        dyStrides[4]=1;
+    }
 
     dim3 threads(dyDims[1], 1, 1); 
     dim3 grid(1,1,1);
@@ -437,8 +460,14 @@ cudnnStatus_t CUDNNWINAPI kunetPoolingForward(  cudnnHandle_t handle,
     cudnnGetPoolingNdDescriptor(poolingDesc, poolndimsreq, &mode, &poolndims, poolDims, poolPad, poolStride);
     for(i=0;i<poolndims;i++) assert(poolDims[i]>=poolStride[i]);
 
+    if(xndims == 4){ // 4-D
+        xDims[4] = 1; yDims[4] = 1; 
+        xStrides[4]=1; yStrides[4]=1;
+        poolDims[2] = 1; poolPad[2] = 0; poolStride[2] = 0;
+    }
+
     if(mode == CUDNN_POOLING_MAX){
-            krnlMaxPool5d<<<BLK,THR>>>(  
+            krnlMaxPoolY5d<<<BLK,THR>>>(  
                     (double *)src,
                     cat5d(xDims),
                     cat3d(poolDims),
@@ -495,6 +524,12 @@ cudnnStatus_t CUDNNWINAPI kunetPoolingBackward( cudnnHandle_t                   
 
     cudnnGetPoolingNdDescriptor(poolingDesc, poolndimsreq, &mode, &poolndims, poolDims, poolPad, poolStride);
     for(i=0;i<poolndims;i++) assert(poolDims[i]>=poolStride[i]);
+
+    if(xndims == 4){ // 4-D
+        xDims[4] = 1; yDims[4] = 1; 
+        xStrides[4]=1; yStrides[4]=1;
+        poolDims[2] = 1; poolPad[2] = 0; poolStride[2] = 0;
+    }
 
     if(mode == CUDNN_POOLING_MAX){
         krnlMaxPool5dDx<<<BLK,THR>>>( 

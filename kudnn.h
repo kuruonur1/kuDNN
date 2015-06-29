@@ -2,6 +2,7 @@
 #include <cudnn.h>
 
 #define cat3d(A)    A[0],A[1],A[2]
+#define cat4d(A)    A[0],A[1],A[2],A[3]
 #define cat5d(A)    A[0],A[1],A[2],A[3],A[4]
 #define prod5d(A)   (A[0]*A[1]*A[2]*A[3]*A[4])
 #define dims2strides5d(A) A[1]*A[2]*A[3]*A[4],A[2]*A[3]*A[4],A[3]*A[4],A[4],1

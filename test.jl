@@ -5,18 +5,18 @@ using CUDArt
 corrd = ConvolutionDescriptor(padding=(1,1), mode=CUDNN_CROSS_CORRELATION)
 convd = ConvolutionDescriptor(mode=CUDNN_CONVOLUTION)
 
-x = reshape(Float64[1:9],3,3,1,1); tx = CudaArray(x)
-w = reshape(Float64[1:4],2,2,1,1); tw = CudaArray(w)
+x = reshape(Float64[1:9],3,3,1,1,1); tx = CudaArray(x)
+w = reshape(Float64[1:4],2,2,1,1,1); tw = CudaArray(w)
 @show size(x) #3x3
 @show size(w) #2x2
 println("x:")
 println(x)
 println("w:")
 println(w)
-println("conv y:")
-println(to_host(cudnnConvolutionForward(tx, tw;convDesc=convd)))
 println("corr y:")
 println(to_host(cudnnConvolutionForward(tx, tw;convDesc=corrd)))
+println("conv y:")
+println(to_host(cudnnConvolutionForward(tx, tw;convDesc=convd)))
 println()
 
 #dy = rand(size(ty)); tdy = CudaArray(dy) #2x2
