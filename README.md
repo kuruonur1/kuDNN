@@ -1,2 +1,2 @@
 # kudnn
-type make tests
+cd src; make libkudnn.so
