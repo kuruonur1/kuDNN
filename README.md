@@ -1,2 +1,2 @@
 # kudnn
-cd src; make libkudnn.so
+To create shared object file `cd src; make libkudnn.so`
